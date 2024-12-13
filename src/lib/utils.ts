@@ -84,7 +84,15 @@ export function getPathToNode(nodeId: string, nodes: Map<string, ConversationNod
 
 	return path;
 }
-
+export function fetchExpert(expertId: string): Promise<Expert> {
+	return Promise.resolve({
+		id: expertId,
+		name: 'Backend Architecture Expert',
+		domain: 'Backend Development',
+		longTermMemory: 'Expert in backend architecture...',
+		rootNodeId: 'root-node-1'
+	});
+}
 export function isNodeVisible(
 	nodeId: string,
 	nodes: Map<string, ConversationNode>,

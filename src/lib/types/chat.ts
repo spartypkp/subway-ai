@@ -58,6 +58,7 @@ export interface UIState {
 		expertId: string | null;
 		nodeId: string | null;  // Changed from timelineId for consistency with our node-based approach
 	};
+	selectedExpert: Expert | null;
 	viewport: ViewportState;
 	navigation: {
 		history: NavigationHistoryEntry[];

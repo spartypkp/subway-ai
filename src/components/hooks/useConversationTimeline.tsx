@@ -1,7 +1,7 @@
 "use client";
 
-import { ConversationNode, Expert, NavigationHistoryEntry, UIState, ViewLevel } from '@/lib/types/chat';
-import { buildTimelineMessages, generateNodeId, generateSummary, getPathToNode, isNodeVisible } from '@/lib/utils';
+import { ConversationNode, NavigationHistoryEntry, UIState, ViewLevel } from '@/lib/types/chat';
+import { buildTimelineMessages, fetchExpert, generateNodeId, generateSummary, getPathToNode, isNodeVisible } from '@/lib/utils';
 import { Message } from 'ai';
 import { useChat } from 'ai/react';
 import { createContext, ReactNode, useCallback, useContext, useMemo, useState } from 'react';
@@ -10,7 +10,7 @@ import { createContext, ReactNode, useCallback, useContext, useMemo, useState } 
 export interface ConversationTimelineContextValue {
 	// State
 	uiState: UIState;
-	activeNodeId: string;
+	activeNodeId: string | null;
 	activePath: string[];
 	currentNode: ConversationNode | null;
 
@@ -24,6 +24,8 @@ export interface ConversationTimelineContextValue {
 	viewport: {
 		setZoom: (zoom: number) => void;
 		pan: (dx: number, dy: number) => void;
+		zoom: number;
+		position: { x: number, y: number; };
 	};
 
 	// Chat functionality from Vercel AI SDK
@@ -46,20 +48,14 @@ const ConversationTimelineContext = createContext<ConversationTimelineContextVal
 
 export interface ConversationTimelineProviderProps {
 	children: ReactNode;
-	expert: Expert;
-	initialNodeId?: string;
 }
 
 export function ConversationTimelineProvider({
 	children,
-	expert,
-	initialNodeId
+
 }: ConversationTimelineProviderProps) {
 	// Use our hook to get all the functionality and state
-	const timelineState = useConversationTimeline({
-		expert,
-		initialNodeId
-	});
+	const timelineState = useConversationTimeline();
 
 	// Provide all the state and functions to children
 	return (
@@ -69,13 +65,7 @@ export function ConversationTimelineProvider({
 	);
 }
 
-export function useConversationTimeline({
-	expert,
-	initialNodeId = expert.rootNodeId
-}: {
-	expert: Expert;
-	initialNodeId?: string;
-}) {
+export function useConversationTimeline() {
 	// Initialize our core state - UI state management and conversation nodes
 	const [uiState, setUIState] = useState<UIState>({
 		view: {
@@ -83,6 +73,7 @@ export function useConversationTimeline({
 			expertId: null,
 			nodeId: null
 		},
+		selectedExpert: null,
 		viewport: {
 			position: { x: 0, y: 0 },
 			zoom: 1
@@ -97,13 +88,32 @@ export function useConversationTimeline({
 	// Maintain our conversation tree structure
 	const [nodes, setNodes] = useState<Map<string, ConversationNode>>(new Map());
 
+	const selectExpert = useCallback(async (expertId: string) => {
+		// In a real application, this would fetch expert data from your backend
+		const expert = await fetchExpert(expertId);
+
+		setUIState(prev => ({
+			...prev,
+			selectedExpert: expert,
+			view: {
+				level: ViewLevel.EXPERT,
+				expertId: expert.id,
+				nodeId: null
+			}
+		}));
+	}, []);
+
 	// Track the currently active node for chat interactions
-	const [activeNodeId, setActiveNodeId] = useState<string>(initialNodeId);
+	const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
 
 	// Initialize the Vercel AI SDK chat integration
 	const chat = useChat({
-		id: `${expert.id}-${activeNodeId}`,
-		initialMessages: buildTimelineMessages(expert, activeNodeId, nodes)
+		id: uiState.selectedExpert
+			? `${uiState.selectedExpert.id}-${activeNodeId ?? 'initial'}`
+			: undefined,
+		initialMessages: uiState.selectedExpert && activeNodeId
+			? buildTimelineMessages(uiState.selectedExpert, activeNodeId, nodes)
+			: []
 	});
 
 	// Navigation System
@@ -155,10 +165,10 @@ export function useConversationTimeline({
 		setActiveNodeId(nodeId); // Update active node for chat
 		navigate({
 			level: ViewLevel.TIMELINE,
-			expertId: expert.id,
+			expertId: uiState.selectedExpert?.id,
 			nodeId
 		});
-	}, [navigate, expert.id]);
+	}, [navigate, uiState.selectedExpert?.id]);
 
 	// Navigation history management
 	const navigateBack = useCallback(() => {
@@ -196,8 +206,10 @@ export function useConversationTimeline({
 					}
 				}
 			}));
-		}
-	}), []);
+		},
+		zoom: uiState.viewport.zoom,
+		position: uiState.viewport.position
+	}), [uiState.viewport]);
 
 	// Node Management
 	const getNode = useCallback((nodeId: string): ConversationNode | null => {
@@ -205,12 +217,18 @@ export function useConversationTimeline({
 	}, [nodes]);
 
 	// Handle new chat messages and update the conversation tree
+	// Update handleSubmit to handle the first message case
 	const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
 		try {
 			e.preventDefault();
+
+			// Ensure we have an expert selected
+			if (!uiState.selectedExpert) {
+				throw new Error('No expert selected');
+			}
+
 			await chat.handleSubmit(e);
 
-			// Ensure we have the messages we need
 			const lastUserMessage = chat.messages[chat.messages.length - 2];
 			const lastAssistantMessage = chat.messages[chat.messages.length - 1];
 
@@ -218,30 +236,59 @@ export function useConversationTimeline({
 				throw new Error('Invalid chat messages');
 			}
 
-			const currentNode = getNode(activeNodeId);
+			let newNode: ConversationNode;
 
-			const newNode: ConversationNode = {
-				id: generateNodeId(),
-				parentId: activeNodeId,
-				expertId: expert.id,
-				summary: generateSummary(lastUserMessage, lastAssistantMessage),
-				timestamp: new Date(),
-				userMessage: lastUserMessage,
-				assistantResponse: lastAssistantMessage,
-				branchNodeIds: [],
-				childNodeId: null,
-				metadata: {
-					isMainTimeline: currentNode?.metadata?.isMainTimeline ?? true,
-					depth: (currentNode?.metadata?.depth || 0) + 1
-				}
-			};
+			if (!activeNodeId) {
+				// Creating the first node in a conversation
+				newNode = {
+					id: generateNodeId(),
+					parentId: null,  // Root node
+					expertId: uiState.selectedExpert.id,
+					summary: generateSummary(lastUserMessage, lastAssistantMessage),
+					timestamp: new Date(),
+					userMessage: lastUserMessage,
+					assistantResponse: lastAssistantMessage,
+					branchNodeIds: [],
+					childNodeId: null,
+					metadata: {
+						isMainTimeline: true,
+						depth: 0  // Root node starts at depth 0
+					}
+				};
+			} else {
+				// Creating a child node in an existing conversation
+				const currentNode = getNode(activeNodeId);
+				newNode = {
+					id: generateNodeId(),
+					parentId: activeNodeId,
+					expertId: uiState.selectedExpert.id,
+					summary: generateSummary(lastUserMessage, lastAssistantMessage),
+					timestamp: new Date(),
+					userMessage: lastUserMessage,
+					assistantResponse: lastAssistantMessage,
+					branchNodeIds: [],
+					childNodeId: null,
+					metadata: {
+						isMainTimeline: currentNode?.metadata?.isMainTimeline ?? true,
+						depth: (currentNode?.metadata?.depth || 0) + 1
+					}
+				};
 
+				// Update the parent node's childNodeId
+				setNodes(prev => {
+					const next = new Map(prev);
+					const parentNode = next.get(activeNodeId);
+					if (parentNode) {
+						parentNode.childNodeId = newNode.id;
+					}
+					next.set(newNode.id, newNode);
+					return next;
+				});
+			}
+
+			// Add the new node to our nodes Map
 			setNodes(prev => {
 				const next = new Map(prev);
-				const parentNode = next.get(activeNodeId);
-				if (parentNode) {
-					parentNode.childNodeId = newNode.id;
-				}
 				next.set(newNode.id, newNode);
 				return next;
 			});
@@ -250,9 +297,8 @@ export function useConversationTimeline({
 			navigateToNode(newNode.id);
 		} catch (error) {
 			console.error('Error in handleSubmit:', error);
-			// Handle error appropriately - could add error state management
 		}
-	}, [activeNodeId, expert.id, chat, getNode, navigateToNode]);
+	}, [activeNodeId, uiState.selectedExpert, chat, getNode, navigateToNode]);
 
 	// Branch creation for alternate conversation paths
 	const createBranch = useCallback(async (parentNodeId: string): Promise<string> => {
@@ -262,7 +308,7 @@ export function useConversationTimeline({
 		const branchNode: ConversationNode = {
 			id: generateNodeId(),
 			parentId: parentNodeId,
-			expertId: expert.id,
+			expertId: uiState.selectedExpert?.id!,
 			summary: 'New branch',
 			timestamp: new Date(),
 			userMessage: null,
@@ -286,15 +332,15 @@ export function useConversationTimeline({
 		});
 
 		return branchNode.id;
-	}, [expert.id, getNode]);
+	}, [uiState.selectedExpert?.id, getNode]);
 
 	// Return the public interface
 	return {
 		// State
 		uiState,
 		activeNodeId,
-		activePath: getPathToNode(activeNodeId, nodes),
-		currentNode: getNode(activeNodeId),
+		activePath: activeNodeId ? getPathToNode(activeNodeId, nodes) : [],
+		currentNode: activeNodeId ? getNode(activeNodeId) : null,
 
 		// Navigation
 		navigateToProjectView,
