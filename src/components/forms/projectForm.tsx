@@ -12,31 +12,50 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ProjectFormValues, projectFormSchema } from "@/lib/schemas/forms";
+import { Project } from "@/lib/types/database";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 
 interface ProjectFormProps {
-	defaultValues?: Partial<ProjectFormValues>;
-	onSubmit: (data: ProjectFormValues) => void;
+	projectId: string;
+	project: Project;
+	setProject: (project: Project) => void;
 }
 
-export function ProjectForm({ defaultValues, onSubmit }: ProjectFormProps) {
+export function ProjectForm({ projectId, project, setProject }: ProjectFormProps) {
 	const form = useForm<ProjectFormValues>({
 		resolver: zodResolver(projectFormSchema),
-		defaultValues: defaultValues || {
+		defaultValues: project || {
 			name: "",
 			description: "",
-			instructions: "",
-			context: {
-				tech_stack: {},
-				guidelines: {}
-			}
+			context: null,
+			settings: null,
+			metadata: null
 		}
 	});
+	const handleProjectUpdate = async (data: ProjectFormValues) => {
+		console.log(`Handling project update with data:`, JSON.stringify(data, null, 2));
+		try {
+			const response = await fetch(`/api/projects/${projectId}`, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(data)
+			});
+
+			if (!response.ok) throw new Error('Failed to update project');
+
+			const updatedProject = await response.json();
+			setProject(updatedProject);
+		} catch (error) {
+			console.error('Failed to update project:', error);
+			// TODO: Add error handling UI
+		}
+	};
+
 
 	return (
 		<Form {...form}>
-			<form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+			<form onSubmit={form.handleSubmit(handleProjectUpdate)} className="space-y-4">
 				<FormField
 					control={form.control}
 					name="name"
@@ -61,23 +80,7 @@ export function ProjectForm({ defaultValues, onSubmit }: ProjectFormProps) {
 								<Textarea
 									placeholder="Describe your project..."
 									{...field}
-								/>
-							</FormControl>
-							<FormMessage />
-						</FormItem>
-					)}
-				/>
-
-				<FormField
-					control={form.control}
-					name="instructions"
-					render={({ field }) => (
-						<FormItem>
-							<FormLabel>Project Instructions</FormLabel>
-							<FormControl>
-								<Textarea
-									placeholder="General instructions for all experts..."
-									{...field}
+									value={field.value || ''}
 								/>
 							</FormControl>
 							<FormMessage />

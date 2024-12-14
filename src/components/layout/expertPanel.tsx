@@ -12,117 +12,43 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ExpertFormValues, ProjectFormValues } from "@/lib/schemas/forms";
+import { Expert, Project } from "@/lib/types/database";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, PenSquare, Plus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-interface Expert {
-	id: string;
-	name: string;
-	color: string;
-	role: string;
-	isActive?: boolean;
-	instructions: {
-		tech_stack: {
-			expertise: string[];
-			experience_level?: string;
-			preferred_tools?: string[];
-		};
-		style_guide: {
-			code_formatting?: string;
-			component_structure?: string;
-			naming_conventions?: string;
-		};
-		general: {
-			response_format?: string;
-			focus_areas?: string[];
-		};
-		personality: {
-			tone?: string;
-			communication_style?: string;
-			expertise_level?: string;
-		};
-	};
+interface ExpertPanelProps {
+	projectId: string;
 }
 
-interface Project {
-	name: string;
-	description: string;
-	instructions: string;
-	lastModified: Date;
-	expertCount: number;
-}
-
-export function ExpertPanel() {
-	const [project, setProject] = useState<Project>({
-		name: "My Project",
-		description: "Project description",
-		instructions: "Project instructions",
-		lastModified: new Date(),
-		expertCount: 3
-	});
-
-	const [experts, setExperts] = useState<Expert[]>([
-		{
-			id: "1",
-			name: "Frontend Expert",
-			color: "#22c55e",
-			role: "UI/UX Specialist",
-			instructions: {
-				tech_stack: {
-					expertise: ["JavaScript", "React"],
-					experience_level: "Senior",
-					preferred_tools: ["VS Code", "Figma"]
-				},
-				style_guide: {
-					code_formatting: "ES6",
-					component_structure: "Component-based",
-					naming_conventions: "CamelCase"
-				},
-				general: {
-					response_format: "JSON",
-					focus_areas: ["UI/UX", "Performance"]
-				},
-				personality: {
-					tone: "Positive",
-					communication_style: "Direct",
-					expertise_level: "Expert"
-				}
-			},
-			isActive: true
-		},
-		{
-			id: "2",
-			name: "Backend Expert",
-			color: "#3b82f6",
-			role: "System Architect",
-			instructions: {
-				tech_stack: {
-					expertise: ["Java", "Spring Boot"],
-					experience_level: "Senior",
-					preferred_tools: ["IntelliJ IDEA", "Postman"]
-				},
-				style_guide: {
-					code_formatting: "Java 11",
-					component_structure: "Microservices",
-					naming_conventions: "PascalCase"
-				},
-				general: {
-					response_format: "JSON",
-					focus_areas: ["Performance", "Security"]
-				},
-				personality: {
-					tone: "Neutral",
-					communication_style: "Professional",
-					expertise_level: "Expert"
-				}
-			},
-			isActive: true
-		}
-	]);
-
+export function ExpertPanel({ projectId }: ExpertPanelProps) {
+	const [project, setProject] = useState<Project | null>(null);
+	const [experts, setExperts] = useState<Expert[]>([]);
 	const [currentExpertIndex, setCurrentExpertIndex] = useState(0);
+	const [loading, setLoading] = useState(true);
+
+	useEffect(() => {
+		fetchProjectAndExperts();
+	}, [projectId]);
+
+	const fetchProjectAndExperts = async () => {
+		try {
+			// Fetch project details
+			const projectResponse = await fetch(`/api/projects/${projectId}`);
+			const projectData = await projectResponse.json();
+			setProject(projectData);
+
+			// Fetch experts
+			const expertsResponse = await fetch(`/api/experts?project_id=${projectId}`);
+			const expertsData = await expertsResponse.json();
+			setExperts(expertsData);
+		} catch (error) {
+			console.error('Failed to fetch data:', error);
+		} finally {
+			setLoading(false);
+		}
+	};
+
 	const currentExpert = experts[currentExpertIndex];
 
 	const canNavigateLeft = currentExpertIndex > 0;
@@ -133,27 +59,51 @@ export function ExpertPanel() {
 			setCurrentExpertIndex(prev => prev - 1);
 		} else if (direction === 'right' && canNavigateRight) {
 			setCurrentExpertIndex(prev => prev + 1);
+		} else if (!canNavigateLeft && direction === 'left') {
+			handleCreateExpert();
+		} else if (!canNavigateRight && direction === 'right') {
+			handleCreateExpert();
 		}
 	};
 
-	const handleProjectUpdate = async (data: ProjectFormValues) => {
-		// TODO: Add API call to update project
-		setProject(prev => ({
-			...prev,
-			...data,
-			lastModified: new Date()
-		}));
+
+
+
+
+	const handleCreateExpert = async () => {
+		try {
+			const response = await fetch('/api/experts', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					project_id: projectId,
+					name: "New Expert",
+					role: "Specialist",
+					color: "#22c55e",
+					position: experts.length,
+					instructions: {
+						tech_stack: { expertise: [] },
+						style_guide: {},
+						general: {},
+						personality: {}
+					}
+				})
+			});
+
+			if (!response.ok) throw new Error('Failed to create expert');
+
+			const newExpert = await response.json();
+			setExperts([...experts, newExpert]);
+			setCurrentExpertIndex(experts.length);
+		} catch (error) {
+			console.error('Failed to create expert:', error);
+			// TODO: Add error handling UI
+		}
 	};
 
-	const handleExpertUpdate = async (data: ExpertFormValues) => {
-		// TODO: Add API call to update expert
-		const updatedExperts = experts.map(expert =>
-			expert.id === currentExpert.id
-				? { ...expert, ...data }
-				: expert
-		);
-		setExperts(updatedExperts);
-	};
+	if (loading || !project) {
+		return <div>Loading...</div>;
+	}
 
 	return (
 		<div className="w-full flex flex-col">
@@ -164,7 +114,7 @@ export function ExpertPanel() {
 					<div className="space-y-1">
 						<h2 className="text-2xl font-semibold">{project.name}</h2>
 						<p className="text-sm text-muted-foreground">
-							{project.expertCount} Experts · Last modified {project.lastModified.toLocaleDateString()}
+							{experts.length} Experts · Last modified {new Date(project.updated_at).toLocaleDateString()}
 						</p>
 					</div>
 
@@ -182,8 +132,9 @@ export function ExpertPanel() {
 											<DialogTitle>Edit Project</DialogTitle>
 										</DialogHeader>
 										<ProjectForm
-											defaultValues={project}
-											onSubmit={handleProjectUpdate}
+											projectId={projectId}
+											project={project}
+											setProject={setProject}
 										/>
 									</DialogContent>
 								</Dialog>
@@ -282,8 +233,10 @@ export function ExpertPanel() {
 														<DialogTitle>Edit Expert</DialogTitle>
 													</DialogHeader>
 													<ExpertForm
-														defaultValues={currentExpert}
-														onSubmit={handleExpertUpdate}
+														projectId={projectId}
+														currentExpert={currentExpert}
+														experts={experts}
+														setExperts={setExperts}
 													/>
 												</DialogContent>
 											</Dialog>

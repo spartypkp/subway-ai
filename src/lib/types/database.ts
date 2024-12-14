@@ -70,27 +70,31 @@ export interface ExpertSettings {
 }
 
 // Main Project type
-export interface Project extends Timestamps {
-	id: UUID;
+export interface Project {
+	id: string;
 	name: string;
 	description: string | null;
-	settings: ProjectSettings;
-	context: ProjectContext;
-	metadata: Record<string, any>;
+	created_at: string;
+	updated_at: string;
+	settings: Record<string, any> | null;
+	context: Record<string, any> | null;
+	metadata: Record<string, any> | null;
 }
 
 // Main Expert type
-export interface Expert extends Timestamps {
-	id: UUID;
-	project_id: UUID;
+export interface Expert {
+	id: string;
+	project_id: string;
 	name: string;
 	role: string;
 	color: string;
 	position: number;
 	active: boolean;
-	instructions: ExpertInstructions;
-	settings: ExpertSettings;
-	metadata: Record<string, any>;
+	created_at: string;
+	updated_at: string;
+	instructions: Record<string, any> | null;
+	settings: Record<string, any> | null;
+	metadata: Record<string, any> | null;
 }
 
 // Helper type for creating new projects
@@ -100,7 +104,7 @@ export type CreateProject = Omit<Project, 'id' | 'created_at' | 'updated_at'>;
 export type CreateExpert = Omit<Expert, 'id' | 'created_at' | 'updated_at'>;
 
 // Helper type for updating projects
-export type UpdateProject = Partial<Omit<Project, 'id' | 'created_at' | 'updated_at'>>;
+export type UpdateProject = Partial<CreateProject>;
 
 // Helper type for updating experts
-export type UpdateExpert = Partial<Omit<Expert, 'id' | 'created_at' | 'updated_at'>>; 
+export type UpdateExpert = Partial<CreateExpert>; 

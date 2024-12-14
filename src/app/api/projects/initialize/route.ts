@@ -31,16 +31,14 @@ const DEFAULT_EXPERT = {
 
 export async function POST(req: Request) {
 	try {
-		// Start a transaction
 		await query('BEGIN');
 
-		// Create new project
 		const { name = "New Project" } = await req.json();
 		const projectResult = await query(
-			`INSERT INTO projects (name, description, instructions)
+			`INSERT INTO projects (name, description, context)
        VALUES ($1, $2, $3)
        RETURNING *`,
-			[name, "A new project", "Default project instructions"]
+			[name, "A new project", JSON.stringify({})]
 		);
 
 		const project = projectResult.rows[0];
@@ -60,7 +58,6 @@ export async function POST(req: Request) {
 		);
 
 		await query('COMMIT');
-
 		return NextResponse.json(project);
 	} catch (error) {
 		await query('ROLLBACK');

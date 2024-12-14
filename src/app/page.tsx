@@ -2,12 +2,25 @@
 "use client";
 
 import { ExpertPanel } from '@/components/layout/expertPanel';
+import { ProjectSelector } from '@/components/layout/projectSelector';
+import { Project } from '@/lib/types/database';
+import { useState } from 'react';
 
 export default function Home() {
+	const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+
+	if (!selectedProject) {
+		return (
+			<div className="container mx-auto py-8">
+				<h1 className="text-3xl font-bold mb-8">Select a Project</h1>
+				<ProjectSelector onProjectSelect={setSelectedProject} />
+			</div>
+		);
+	}
 
 	return (
 		<div>
-			<ExpertPanel />
+			<ExpertPanel projectId={selectedProject.id} />
 			<div className="flex-1 h-full">
 				<div className="flex items-center justify-center h-[80vh]">
 					<div className="max-w-4xl w-full p-8">
@@ -21,7 +34,6 @@ export default function Home() {
 						</div>
 					</div>
 				</div>
-				Test
 			</div>
 		</div>
 	);

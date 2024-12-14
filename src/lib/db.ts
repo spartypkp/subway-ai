@@ -2,10 +2,10 @@ import { Pool } from 'pg';
 
 // Create a new Pool instance
 export const pool = new Pool({
-	user: 'postgres',
+	user: '',
 	host: 'localhost',
-	database: 'airoundtable',
-	password: 'your_password',
+	database: 'subwayai',
+	password: '',
 	port: 5432,
 });
 
