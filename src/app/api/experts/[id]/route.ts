@@ -80,4 +80,48 @@ export async function PUT(
 			{ status: 500 }
 		);
 	}
+}
+
+export async function DELETE(
+	req: Request,
+	{ params }: { params: { id: string; }; }
+) {
+	const { id } = params;
+	if (!id) {
+		return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
+	}
+
+	try {
+		await query('BEGIN');
+
+		// Delete associated timeline nodes first
+		await query(
+			'DELETE FROM timeline_nodes WHERE expert_id = $1',
+			[id]
+		);
+
+		// Then delete the expert
+		const result = await query(
+			'DELETE FROM experts WHERE id = $1 RETURNING *',
+			[id]
+		);
+
+		await query('COMMIT');
+
+		if (result.rows.length === 0) {
+			return NextResponse.json(
+				{ error: 'Expert not found' },
+				{ status: 404 }
+			);
+		}
+
+		return NextResponse.json(result.rows[0]);
+	} catch (error) {
+		await query('ROLLBACK');
+		console.error('Database error:', error);
+		return NextResponse.json(
+			{ error: 'Database error' },
+			{ status: 500 }
+		);
+	}
 } 

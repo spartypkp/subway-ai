@@ -1,42 +1,19 @@
 import { query } from '@/lib/db';
 import { NextResponse } from 'next/server';
 
-export async function POST(req: Request) {
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const expertId = searchParams.get('expert_id');
+  const projectId = searchParams.get('project_id');
+
   try {
-    const {
-      project_id,
-      expert_id,
-      parent_id = null,
-      node_type = 'message',
-      content = {
-        text: '',
-        role: 'user'
-      }
-    } = await req.json();
-
     const result = await query(
-      `INSERT INTO timeline_nodes (
-        project_id,
-        expert_id,
-        parent_id,
-        node_type,
-        content,
-        status,
-        metadata
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *`,
-      [
-        project_id,
-        expert_id,
-        parent_id,
-        node_type,
-        JSON.stringify(content),
-        null,
-        null
-      ]
+      `SELECT * FROM timeline_nodes 
+       WHERE expert_id = $1 AND project_id = $2
+       ORDER BY created_at ASC`,
+      [expertId, projectId]
     );
-
-    return NextResponse.json(result.rows[0]);
+    return NextResponse.json(result.rows);
   } catch (error) {
     console.error('Database error:', error);
     return NextResponse.json({ error: 'Database error' }, { status: 500 });

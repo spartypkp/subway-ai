@@ -1,7 +1,5 @@
 "use client";
 
-import { ExpertForm } from "@/components/forms/expertForm";
-import { ProjectForm } from "@/components/forms/projectForm";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -10,21 +8,20 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
-import { Separator } from "@/components/ui/separator";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ExpertCard } from "@/components/expert/expertCard";
 import { Expert, Project } from "@/lib/types/database";
-import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, PenSquare, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 
 interface ExpertPanelProps {
 	projectId: string;
+	onExpertSelect: (expert: Expert | null) => void;
 }
 
-export function ExpertPanel({ projectId }: ExpertPanelProps) {
+export function ExpertPanel({ projectId, onExpertSelect }: ExpertPanelProps) {
 	const [project, setProject] = useState<Project | null>(null);
 	const [experts, setExperts] = useState<Expert[]>([]);
-	const [currentExpertIndex, setCurrentExpertIndex] = useState(0);
+	const [selectedExpert, setSelectedExpert] = useState<Expert | null>(null);
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
@@ -33,14 +30,17 @@ export function ExpertPanel({ projectId }: ExpertPanelProps) {
 
 	const fetchProjectAndExperts = async () => {
 		try {
-			// Fetch project details
-			const projectResponse = await fetch(`/api/projects/${projectId}`);
-			const projectData = await projectResponse.json();
-			setProject(projectData);
+			const [projectRes, expertsRes] = await Promise.all([
+				fetch(`/api/projects/${projectId}`),
+				fetch(`/api/experts?project_id=${projectId}`)
+			]);
+			
+			const [projectData, expertsData] = await Promise.all([
+				projectRes.json(),
+				expertsRes.json()
+			]);
 
-			// Fetch experts
-			const expertsResponse = await fetch(`/api/experts?project_id=${projectId}`);
-			const expertsData = await expertsResponse.json();
+			setProject(projectData);
 			setExperts(expertsData);
 		} catch (error) {
 			console.error('Failed to fetch data:', error);
@@ -49,26 +49,16 @@ export function ExpertPanel({ projectId }: ExpertPanelProps) {
 		}
 	};
 
-	const currentExpert = experts[currentExpertIndex];
-
-	const canNavigateLeft = currentExpertIndex > 0;
-	const canNavigateRight = currentExpertIndex < experts.length - 1;
-
-	const handleExpertNavigation = (direction: 'left' | 'right') => {
-		if (direction === 'left' && canNavigateLeft) {
-			setCurrentExpertIndex(prev => prev - 1);
-		} else if (direction === 'right' && canNavigateRight) {
-			setCurrentExpertIndex(prev => prev + 1);
-		} else if (!canNavigateLeft && direction === 'left') {
-			handleCreateExpert();
-		} else if (!canNavigateRight && direction === 'right') {
-			handleCreateExpert();
-		}
+	const handleExpertSelect = (expert: Expert) => {
+		setSelectedExpert(expert);
+		onExpertSelect(expert);
 	};
 
-
-
-
+	const handleExpertUpdate = (updatedExpert: Expert) => {
+		setExperts(experts.map(e => 
+			e.id === updatedExpert.id ? updatedExpert : e
+		));
+	};
 
 	const handleCreateExpert = async () => {
 		try {
@@ -80,13 +70,7 @@ export function ExpertPanel({ projectId }: ExpertPanelProps) {
 					name: "New Expert",
 					role: "Specialist",
 					color: "#22c55e",
-					position: experts.length,
-					instructions: {
-						tech_stack: { expertise: [] },
-						style_guide: {},
-						general: {},
-						personality: {}
-					}
+					position: experts.length
 				})
 			});
 
@@ -94,10 +78,26 @@ export function ExpertPanel({ projectId }: ExpertPanelProps) {
 
 			const newExpert = await response.json();
 			setExperts([...experts, newExpert]);
-			setCurrentExpertIndex(experts.length);
 		} catch (error) {
 			console.error('Failed to create expert:', error);
-			// TODO: Add error handling UI
+		}
+	};
+
+	const handleExpertDelete = async (expertToDelete: Expert) => {
+		try {
+			const response = await fetch(`/api/experts/${expertToDelete.id}`, {
+				method: 'DELETE'
+			});
+
+			if (!response.ok) throw new Error('Failed to delete expert');
+
+			setExperts(experts.filter(e => e.id !== expertToDelete.id));
+			if (selectedExpert?.id === expertToDelete.id) {
+				setSelectedExpert(null);
+				onExpertSelect(null); // or handle this case appropriately
+			}
+		} catch (error) {
+			console.error('Failed to delete expert:', error);
 		}
 	};
 
@@ -106,160 +106,31 @@ export function ExpertPanel({ projectId }: ExpertPanelProps) {
 	}
 
 	return (
-		<div className="w-full flex flex-col">
-			{/* Project Navigation Section */}
-			<div className="p-4 bg-background border-b relative overflow-hidden">
-				<div className="absolute inset-0 opacity-5 background-pattern" />
-				<div className="flex items-center justify-between relative">
-					<div className="space-y-1">
-						<h2 className="text-2xl font-semibold">{project.name}</h2>
-						<p className="text-sm text-muted-foreground">
-							{experts.length} Experts · Last modified {new Date(project.updated_at).toLocaleDateString()}
-						</p>
-					</div>
-
-					<ProjectForm
-						projectId={projectId}
-						project={project}
-						setProject={setProject}
-					/>
+		<div className="p-6 border-b bg-background">
+			<div className="flex items-center justify-between mb-4">
+				<div>
+					<h2 className="text-2xl font-semibold">{project.name}</h2>
+					<p className="text-sm text-muted-foreground">
+						{experts.length} Experts · Last modified {new Date(project.updated_at).toLocaleDateString()}
+					</p>
 				</div>
+				<Button onClick={handleCreateExpert} className="gap-2">
+					<Plus className="h-4 w-4" />
+					Add Expert
+				</Button>
 			</div>
 
-			<Separator />
-
-			{/* Expert Panel Section */}
-			<div className="p-4 flex items-center justify-center bg-background/50 backdrop-blur-sm">
-				<div className="flex items-center gap-2">
-					<TooltipProvider delayDuration={200}>
-						{/* Left Navigation */}
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									variant="outline"
-									size="icon"
-									className="h-14 w-14 rounded-full transition-all hover:scale-105 hover:border-[#22c55e] hover:text-[#22c55e]"
-									onClick={() => handleExpertNavigation('left')}
-								>
-									{canNavigateLeft ? (
-										<ChevronLeft className="h-8 w-8" />
-									) : (
-										<Plus className="h-8 w-8" />
-									)}
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom" className="text-sm">
-								{canNavigateLeft
-									? "Switch to Previous Expert"
-									: "Create New Expert"}
-							</TooltipContent>
-						</Tooltip>
-
-						{/* Expert "Subway Sign" */}
-						<AnimatePresence mode="wait">
-							<motion.div
-								key={currentExpert.id}
-								initial={{ opacity: 0, y: 10 }}
-								animate={{ opacity: 1, y: 0 }}
-								exit={{ opacity: 0, y: -10 }}
-								className="relative"
-							>
-								<div
-									className="px-10 py-5 rounded-2xl flex items-center justify-between group transition-all hover:scale-[1.02] w-[600px]"
-									style={{
-										backgroundColor: `color-mix(in srgb, ${currentExpert.color} 10%, transparent)`,
-										border: `2px solid ${currentExpert.color}`,
-										boxShadow: `
-											0 0 30px ${currentExpert.color}15,
-											inset 0 0 20px ${currentExpert.color}05
-										`
-									}}
-								>
-									<div className="flex items-center gap-5">
-										<div
-											className="h-6 w-6 rounded-full"
-											style={{
-												backgroundColor: currentExpert.color,
-												boxShadow: `0 0 10px ${currentExpert.color}`
-											}}
-										/>
-										<div className="flex flex-col">
-											<span className="text-3xl font-semibold tracking-tight">
-												{currentExpert.name}
-											</span>
-											<span className="text-sm font-medium text-muted-foreground">
-												{currentExpert.role}
-											</span>
-										</div>
-									</div>
-
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<Dialog>
-												<DialogTrigger asChild>
-													<Button
-														variant="ghost"
-														size="icon"
-														className="ml-4 h-12 w-12 opacity-0 group-hover:opacity-100 transition-opacity rounded-full"
-														style={{
-															borderColor: currentExpert.color,
-															color: currentExpert.color
-														}}
-													>
-														<PenSquare className="h-6 w-6" />
-													</Button>
-												</DialogTrigger>
-												<DialogContent>
-													<DialogHeader>
-														<DialogTitle>Edit Expert</DialogTitle>
-													</DialogHeader>
-													<ExpertForm
-														projectId={projectId}
-														currentExpert={currentExpert}
-														experts={experts}
-														setExperts={setExperts}
-													/>
-												</DialogContent>
-											</Dialog>
-										</TooltipTrigger>
-										<TooltipContent>Configure Expert Settings</TooltipContent>
-									</Tooltip>
-								</div>
-
-								{/* Optional: Add a subtle reflection effect */}
-								<div
-									className="absolute -bottom-6 left-0 right-0 h-6 blur-sm opacity-30"
-									style={{
-										background: `linear-gradient(to bottom, ${currentExpert.color}, transparent)`
-									}}
-								/>
-							</motion.div>
-						</AnimatePresence>
-
-						{/* Right Navigation */}
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									variant="outline"
-									size="icon"
-									className="h-14 w-14 rounded-full transition-all hover:scale-105 hover:border-[#22c55e] hover:text-[#22c55e]"
-									onClick={() => handleExpertNavigation('right')}
-								>
-									{canNavigateRight ? (
-										<ChevronRight className="h-8 w-8" />
-									) : (
-										<Plus className="h-8 w-8" />
-									)}
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom" className="text-sm">
-								{canNavigateRight
-									? "Switch to Next Expert"
-									: "Create New Expert"}
-							</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
-				</div>
+			<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+				{experts.map(expert => (
+					<ExpertCard
+						key={expert.id}
+						expert={expert}
+						isSelected={expert.id === selectedExpert?.id}
+						onSelect={handleExpertSelect}
+						onUpdate={handleExpertUpdate}
+						onDelete={handleExpertDelete}
+					/>
+				))}
 			</div>
 		</div>
 	);
