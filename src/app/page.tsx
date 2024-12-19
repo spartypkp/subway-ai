@@ -26,9 +26,9 @@ export default function Home() {
 					<div className="max-w-4xl w-full p-8">
 						<div className="rounded-xl border bg-card text-card-foreground shadow">
 							<div className="p-6 flex flex-col items-center gap-4">
-								<h2 className="text-2xl font-semibold">Welcome to AIRoundTable</h2>
+								<h2 className="text-2xl font-semibold">Show AI Chat Map View</h2>
 								<p className="text-muted-foreground text-center">
-									This is where your AI experts will collaborate. Select or add an expert above to begin.
+									This is where your AI expert chats will be displayed as a downward tree, similar to the look of a subway map. 
 								</p>
 							</div>
 						</div>

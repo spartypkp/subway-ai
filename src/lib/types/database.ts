@@ -107,4 +107,48 @@ export type CreateExpert = Omit<Expert, 'id' | 'created_at' | 'updated_at'>;
 export type UpdateProject = Partial<CreateProject>;
 
 // Helper type for updating experts
-export type UpdateExpert = Partial<CreateExpert>; 
+export type UpdateExpert = Partial<CreateExpert>;
+
+export type NodeType = 'root' | 'message' | 'fork';
+export type NodeStatus = 'archived' | 'hidden' | 'featured' | null;
+
+interface BaseNode {
+	id: string;
+	project_id: string;
+	expert_id: string;
+	parent_id: string | null;
+	node_type: NodeType;
+	status: NodeStatus;
+	metadata: Record<string, any> | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface MessageNode extends BaseNode {
+	node_type: 'message';
+	content: {
+		text: string;
+		role: 'user' | 'assistant';
+	};
+}
+
+export interface ForkNode extends BaseNode {
+	node_type: 'fork';
+	content: {
+		reason: string;
+		branches: Array<{
+			position: number;
+			description: string;
+		}>;
+	};
+}
+
+export interface RootNode extends BaseNode {
+	node_type: 'root';
+	content: {
+		title: string;
+		context: Record<string, any>;
+	};
+}
+
+export type TimelineNode = MessageNode | ForkNode | RootNode; 

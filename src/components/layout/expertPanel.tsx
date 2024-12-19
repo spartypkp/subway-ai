@@ -118,30 +118,11 @@ export function ExpertPanel({ projectId }: ExpertPanelProps) {
 						</p>
 					</div>
 
-					<TooltipProvider>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Dialog>
-									<DialogTrigger asChild>
-										<Button variant="ghost" size="icon" className="hover:scale-105 transition-transform">
-											<PenSquare className="h-4 w-4" />
-										</Button>
-									</DialogTrigger>
-									<DialogContent>
-										<DialogHeader>
-											<DialogTitle>Edit Project</DialogTitle>
-										</DialogHeader>
-										<ProjectForm
-											projectId={projectId}
-											project={project}
-											setProject={setProject}
-										/>
-									</DialogContent>
-								</Dialog>
-							</TooltipTrigger>
-							<TooltipContent>Edit Project Details</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
+					<ProjectForm
+						projectId={projectId}
+						project={project}
+						setProject={setProject}
+					/>
 				</div>
 			</div>
 
