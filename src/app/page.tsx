@@ -249,7 +249,7 @@ export default function Home() {
 			<div className="flex flex-1 overflow-hidden">
 				{/* Desktop Sidebar */}
 				<div className="hidden md:flex md:w-[300px] border-r flex-col overflow-hidden p-4">
-					<div className="flex items-center justify-between mb-4">
+					{/* <div className="flex items-center justify-between mb-4">
 						<h3 className="font-medium flex items-center gap-2">
 							<Map className="h-4 w-4" />
 							Projects
@@ -287,7 +287,7 @@ export default function Home() {
 								))}
 							</div>
 						</ScrollArea>
-					)}
+					)} */}
 					
 					<div className="mt-6 border-t pt-4 flex-1 overflow-hidden">
 						<h3 className="font-medium mb-3 flex items-center gap-2">

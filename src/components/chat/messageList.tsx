@@ -24,10 +24,10 @@ interface MessageListProps {
   onBranchCreated: (newBranchId: string) => void;
 }
 
-// Type for message content
+// Updated to match the actual database JSONB structure
 interface MessageContent {
-  text: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | string;
+  content: string;
 }
 
 // Type for fork content
@@ -37,285 +37,211 @@ interface ForkContent {
 
 export function MessageList({ projectId, branchId, onBranchCreated }: MessageListProps) {
   const [messages, setMessages] = useState<TimelineNode[]>([]);
-  const [filteredMessages, setFilteredMessages] = useState<TimelineNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeMessage, setActiveMessage] = useState<string | null>(null);
   const [branchReason, setBranchReason] = useState('');
   const [branchDialogOpen, setBranchDialogOpen] = useState(false);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [creatingBranch, setCreatingBranch] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const [lastUpdateTime, setLastUpdateTime] = useState<number>(Date.now());
-  const [showBranchMarkers, setShowBranchMarkers] = useState(true);
-  const [animateIn, setAnimateIn] = useState(false);
   const [showLoadingIndicator, setShowLoadingIndicator] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Add component lifecycle debugging
-  useEffect(() => {
-    console.log('🔧 DEBUG: MessageList mounted with projectId:', projectId, 'branchId:', branchId);
-    return () => console.log('🔧 DEBUG: MessageList unmounted');
-  }, [projectId, branchId]);
-
   // Function to fetch messages
   const fetchMessages = async () => {
-    console.log('🔧 DEBUG: fetchMessages called with projectId:', projectId, 'branchId:', branchId);
+    console.log('Fetching messages for project:', projectId, 'branch:', branchId || 'main');
     setLoading(true);
     try {
-      // Always fetch the complete conversation tree
-      let url = `/api/nodes?project_id=${projectId}&complete_tree=true`;
+      // Base URL for fetching messages
+      let url = `/api/nodes?project_id=${projectId}`;
       
-      console.log('🔧 DEBUG: Fetching messages from:', url);
+      // If branchId is provided, fetch messages for that specific branch
+      // Otherwise, fetch the complete tree to get all messages
+      if (branchId) {
+        url += `&branch_id=${branchId}`;
+      } else {
+        url += `&complete_tree=true`;
+      }
+      
+      console.log('Fetching from:', url);
       const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`API request failed with status ${response.status}`);
+      }
+      
       const data = await response.json();
+      console.log(`Received ${data.length} messages`);
       
-      console.log(`🔧 DEBUG: Received ${data.length} messages:`, data);
-      
-      // Enhanced logging - log each message type and content
-      data.forEach((msg: TimelineNode, index: number) => {
-        console.log(`🔧 DEBUG: Message ${index}: type=${msg.type}, id=${msg.id}, created_at=${msg.created_at}, parent_id=${msg.parent_id}`);
-        console.log(`🔧 DEBUG: Content type: ${typeof msg.content}`);
-        if (typeof msg.content === 'object') {
-          console.log('🔧 DEBUG: Content keys:', Object.keys(msg.content));
-        }
-        console.log('🔧 DEBUG: Content:', msg.content);
-      });
-      
-      // Check relationship chain
-      console.log('🔧 DEBUG: Message parent-child relationships:');
-      const nodeMap = new Map();
-      data.forEach((node: TimelineNode) => nodeMap.set(node.id, node));
-      data.forEach((node: TimelineNode) => {
-        if (node.parent_id) {
-          const parent = nodeMap.get(node.parent_id);
-          if (parent) {
-            console.log(`🔧 DEBUG: Node ${node.id} (${node.type}) -> Parent ${parent.id} (${parent.type})`);
-          } else {
-            console.log(`🔧 DEBUG: Node ${node.id} has parent_id ${node.parent_id} but parent not found`);
-          }
-        } else {
-          console.log(`🔧 DEBUG: Node ${node.id} (${node.type}) has no parent (root node)`);
-        }
-      });
-      
-      // Store all messages
+      // Store messages
       setMessages(data);
       
-      // Hide loading indicator after getting data
+      // Hide loading indicator
       setShowLoadingIndicator(false);
     } catch (error) {
-      console.error('🔧 DEBUG: Failed to fetch messages:', error);
+      console.error('Failed to fetch messages:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  // Filter messages based on the selected branch
-  useEffect(() => {
-    if (!messages.length) return;
-    
-    console.log('🔧 DEBUG: Filtering messages for branch:', branchId);
-    
-    if (!branchId) {
-      // If no branch is selected, show all messages
-      console.log('🔧 DEBUG: No branch selected, showing all messages');
-      setFilteredMessages(messages);
-      return;
-    }
-    
-    // Create a map of all nodes for easy lookup
-    const nodeMap = new Map();
-    messages.forEach(node => nodeMap.set(node.id, node));
-    
-    // Find the selected branch node
-    const selectedBranchNode = messages.find(node => node.branch_id === branchId);
-    if (!selectedBranchNode) {
-      console.log('🔧 DEBUG: Selected branch node not found, showing all messages');
-      setFilteredMessages(messages);
-      return;
-    }
-    
-    console.log('🔧 DEBUG: Selected branch node:', selectedBranchNode);
-    
-    // Collect all nodes in the current branch
-    const branchNodes = messages.filter(node => node.branch_id === branchId);
-    console.log(`🔧 DEBUG: Found ${branchNodes.length} nodes in the selected branch`);
-    
-    // Collect parent branch nodes by traversing up the tree
-    const relevantNodes = new Set<string>();
-    
-    // Add all nodes from the current branch
-    branchNodes.forEach(node => relevantNodes.add(node.id));
-    
-    // Function to recursively add parent nodes
-    const addParentNodes = (nodeId: string) => {
-      const node = nodeMap.get(nodeId);
-      if (!node) return;
-      
-      // Add this node
-      relevantNodes.add(node.id);
-      
-      // If this node has a parent, add the parent and its ancestors
-      if (node.parent_id) {
-        const parentNode = nodeMap.get(node.parent_id);
-        if (parentNode) {
-          relevantNodes.add(parentNode.id);
-          addParentNodes(parentNode.id);
-        }
-      }
-    };
-    
-    // Start with the first node in the branch and add all its parents
-    if (branchNodes.length > 0) {
-      const firstNode = branchNodes[0];
-      if (firstNode.parent_id) {
-        addParentNodes(firstNode.parent_id);
-      }
-    }
-    
-    console.log(`🔧 DEBUG: Found ${relevantNodes.size} relevant nodes for the branch`);
-    
-    // Filter messages to only include nodes in the current branch and its parent branches
-    const filtered = messages.filter(node => relevantNodes.has(node.id));
-    console.log(`🔧 DEBUG: Filtered to ${filtered.length} messages`);
-    
-    // Sort by creation time to maintain chronological order
-    filtered.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    
-    setFilteredMessages(filtered);
-    
-    // Check if we have new messages
-    const hasNewMessage = filtered.length > filteredMessages.length;
-    console.log(`🔧 DEBUG: hasNewMessage=${hasNewMessage}, previous count=${filteredMessages.length}, new count=${filtered.length}`);
-    
-    // Trigger animation for new messages only if there are new ones
-    if (hasNewMessage) {
-      console.log('🔧 DEBUG: Triggering new message animation');
-      setAnimateIn(true);
-      setTimeout(() => setAnimateIn(false), 500);
-    }
-  }, [messages, branchId]);
-
-  // Fetch messages when project changes
+  // Fetch messages when project or branch changes
   useEffect(() => {
     fetchMessages();
-  }, [projectId]);
-  
-  // Poll for updates when lastUpdateTime changes
-  useEffect(() => {
-    const doFetch = async () => {
-      await fetchMessages();
-    };
-    doFetch();
-  }, [lastUpdateTime]);
+  }, [projectId, branchId]);
 
-  // Poll for new messages every 2 seconds when sending is happening
+  // Set up polling for updates (every 3 seconds when expecting a response)
   useEffect(() => {
     const interval = setInterval(() => {
-      // Only update if the last message is from the user
-      const lastMessage = filteredMessages[filteredMessages.length - 1];
+      // Only poll if we're possibly waiting for an AI response
+      const lastMessage = messages[messages.length - 1];
       if (lastMessage && lastMessage.type === 'message') {
         try {
           const content = lastMessage.content as unknown as MessageContent;
           if (content.role === 'user') {
             setShowLoadingIndicator(true);
-            setLastUpdateTime(Date.now());
+            fetchMessages();
           }
         } catch (error) {
-          console.error('Error parsing message content:', error);
+          console.error('Error checking last message:', error);
         }
       }
-    }, 2000);
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [filteredMessages]);
+  }, [messages, projectId, branchId]);
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [filteredMessages]);
+  }, [messages]);
 
-  // Enhance the message content parsing with more detailed logging 
-  const parseMessageContent = (content: any): MessageContent => {
-    console.log('🔧 DEBUG: Parsing content:', content, 'Type:', typeof content);
+  // Filter messages based on the current branch
+  const filteredMessages = React.useMemo(() => {
+    if (!messages.length) return [];
     
-    try {
-      // Handle null or undefined content
-      if (content === null || content === undefined) {
-        console.warn('🔧 DEBUG: Received null or undefined content');
-        return { text: '', role: 'assistant' };
+    // If no specific branch is selected, show messages from all branches
+    // (You might want to adjust this logic based on your requirements)
+    if (!branchId) {
+      // Filter to just show the main branch for now
+      // Find the main branch (usually the first branch created)
+      const branches = new Set(messages.map(m => m.branch_id));
+      console.log('Available branches:', [...branches]);
+      
+      // Look for the root node to identify the main branch
+      const rootNode = messages.find(m => m.type === 'root');
+      if (rootNode) {
+        const mainBranchId = rootNode.branch_id;
+        console.log('Main branch ID:', mainBranchId);
+        
+        return messages
+          .filter(m => m.branch_id === mainBranchId)
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       }
       
-      // Handle if content is already an object with the expected structure
-      if (typeof content === 'object' && content !== null) {
-        // Log the keys to help debug
-        console.log('🔧 DEBUG: Content object keys:', Object.keys(content));
+      // Fallback: if no root node found, just show all messages sorted by time
+      return [...messages].sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+    }
+    
+    // If a specific branch is selected, filter to show only messages from that branch
+    return messages
+      .filter(m => m.branch_id === branchId)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }, [messages, branchId]);
+
+  // Safely parse message content with proper error handling
+  const parseMessageContent = (node: TimelineNode): MessageContent => {
+    try {
+      if (!node.content) {
+        console.warn('Node has no content:', node.id);
+        return { role: 'assistant', content: 'No content available' };
+      }
+      
+      // If content is already an object
+      if (typeof node.content === 'object') {
+        const content = node.content as any;
         
-        // Check if the object already has the expected structure
-        if ('text' in content && 'role' in content) {
-          console.log('🔧 DEBUG: Content already has correct structure with role:', content.role);
-          console.log('🔧 DEBUG: Text preview:', content.text.substring(0, 30) + '...');
+        // Check if it has the expected structure
+        if (content.role && content.content) {
           return {
-            text: content.text || '',
-            role: content.role || 'assistant'
+            role: content.role,
+            content: content.content
           };
-        } 
+        }
         
-        // Handle case where content is an object but doesn't have expected structure
-        console.warn('🔧 DEBUG: Content is an object but missing expected fields');
-        return { 
-          text: JSON.stringify(content),
-          role: 'assistant'
+        // Handle legacy format with 'text' instead of 'content'
+        if (content.role && content.text) {
+          return {
+            role: content.role,
+            content: content.text
+          };
+        }
+        
+        // If no recognizable structure, stringify the object
+        console.warn('Node content has unexpected structure:', node.id, content);
+        return {
+          role: 'assistant',
+          content: JSON.stringify(content)
         };
       }
       
-      // Handle string content
-      if (typeof content === 'string') {
-        console.log('🔧 DEBUG: Content is a string, attempting to parse as JSON');
+      // If content is a string, try to parse it
+      if (typeof node.content === 'string') {
         try {
-          // Try to parse as JSON
-          const parsed = JSON.parse(content);
-          
-          // If parsed successfully and has the right structure, use it
-          if (typeof parsed === 'object' && parsed !== null) {
-            if ('text' in parsed && 'role' in parsed) {
-              console.log('🔧 DEBUG: Successfully parsed string to message content');
-              return {
-                text: parsed.text || '',
-                role: parsed.role || 'assistant'
-              };
-            }
+          const parsed = JSON.parse(node.content);
+          if (parsed.role && (parsed.content || parsed.text)) {
+            return {
+              role: parsed.role,
+              content: parsed.content || parsed.text
+            };
           }
-          
-          // If parsed but doesn't have the right structure
-          console.warn('🔧 DEBUG: Parsed string to object but missing expected fields');
-          return {
-            text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed),
-            role: 'assistant'
-          };
+          return { role: 'assistant', content: node.content };
         } catch (e) {
-          // If not valid JSON, treat as plain text
-          console.log('🔧 DEBUG: String is not valid JSON, treating as plain text');
-          return {
-            text: content,
-            role: 'assistant'
-          };
+          // Not valid JSON, treat as raw content
+          return { role: 'assistant', content: node.content };
         }
       }
       
       // Fallback for any other type
-      console.warn('🔧 DEBUG: Unhandled content type:', typeof content);
-      return {
-        text: String(content),
-        role: 'assistant'
-      };
+      console.warn('Unexpected content type:', typeof node.content);
+      return { role: 'assistant', content: String(node.content) };
     } catch (error) {
-      console.error('🔧 DEBUG: Error parsing message content:', error);
-      return { text: 'Error parsing message', role: 'assistant' };
+      console.error('Error parsing message content:', error, node);
+      return { role: 'assistant', content: 'Error parsing message' };
     }
   };
 
-  // Format message text with simple markdown-like formatting
+  // Parse fork content
+  const parseForkContent = (node: TimelineNode): ForkContent => {
+    try {
+      if (typeof node.content === 'object') {
+        const content = node.content as any;
+        if (content.reason) {
+          return { reason: content.reason };
+        }
+      }
+      
+      if (typeof node.content === 'string') {
+        try {
+          const parsed = JSON.parse(node.content);
+          if (parsed.reason) {
+            return { reason: parsed.reason };
+          }
+        } catch (e) {
+          // Not valid JSON
+        }
+      }
+      
+      // Default fork reason if none found
+      return { reason: 'Branch point' };
+    } catch (error) {
+      console.error('Error parsing fork content:', error);
+      return { reason: 'Branch point' };
+    }
+  };
+
+  // Format message text with markdown-like formatting
   const formatMessageText = (text: string): string => {
     if (!text) return '';
     
@@ -357,7 +283,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
   }
 
   const handleBranchClick = (messageId: string) => {
-    console.log('🔧 DEBUG: Branch button clicked for message:', messageId);
+    console.log('Branch button clicked for message:', messageId);
     setSelectedMessageId(messageId);
     setBranchDialogOpen(true);
   };
@@ -392,58 +318,43 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
 
   return (
    <>
-      
       <div className="flex flex-col gap-6 max-w-3xl mx-auto p-4 pb-32">
-        {/* Branch line visualization - only show if we have messages */}
-        {filteredMessages.length > 0 && showBranchMarkers && (
-          <div className="absolute left-[calc(50%-1px)] top-0 bottom-0 w-2 pointer-events-none">
-            <div 
-              className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary opacity-20"
-              style={{ background: `linear-gradient(to bottom, transparent, var(--primary) 10%, var(--primary) 90%, transparent)` }}
-            ></div>
-          </div>
-        )}
+        {/* Branch line visualization */}
+        <div className="absolute left-[calc(50%-1px)] top-0 bottom-0 w-2 pointer-events-none">
+          <div 
+            className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary opacity-20"
+            style={{ background: `linear-gradient(to bottom, transparent, var(--primary) 10%, var(--primary) 90%, transparent)` }}
+          ></div>
+        </div>
         
         {filteredMessages
           .map((message, index) => {
             // Skip root nodes as they're not visible messages
             if (message.type === 'root') {
-              console.log(`🔧 DEBUG: Skipping root node: ${message.id}`);
               return null;
             }
 
             if (message.type === 'message') {
               try {
-                console.log(`🔧 DEBUG: Rendering message node: ${message.id}, index: ${index}`);
-                // Use the improved parsing function
-                const messageContent = parseMessageContent(message.content);
-                console.log('🔧 DEBUG: Parsed content:', messageContent);
+                // Parse message content using our updated parser
+                const messageContent = parseMessageContent(message);
                 const isUser = messageContent.role === 'user';
-                console.log(`🔧 DEBUG: Message is from ${isUser ? 'user' : 'assistant'}`);
-                const isLatest = index === filteredMessages.length - 1;
-                
-                // Add a unique data attribute for debugging
-                const debugId = `message-${message.id.substring(0, 8)}`;
                 
                 return (
                   <div 
                     key={message.id} 
                     className={cn(
                       "group relative",
-                      isUser ? "ml-12" : "mr-12",
-                      isLatest && animateIn && "animate-slideIn"
+                      isUser ? "ml-12" : "mr-12"
                     )}
                     onMouseEnter={() => setActiveMessage(message.id)}
                     onMouseLeave={() => setActiveMessage(null)}
-                    data-debug-id={debugId}
                   >
                     {/* Connection to branch line */}
-                    {showBranchMarkers && (
-                      <div className={cn(
-                        "absolute top-1/2 w-8 h-0.5 bg-primary opacity-20",
-                        isUser ? "right-full" : "left-full"
-                      )}></div>
-                    )}
+                    <div className={cn(
+                      "absolute top-1/2 w-8 h-0.5 bg-primary opacity-20",
+                      isUser ? "right-full" : "left-full"
+                    )}></div>
                     
                     {/* Avatar */}
                     <div className={cn(
@@ -469,7 +380,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
                           "prose prose-sm max-w-none",
                           isUser ? "prose-invert" : "dark:prose-invert"
                         )}
-                        dangerouslySetInnerHTML={{ __html: formatMessageText(messageContent.text) }}
+                        dangerouslySetInnerHTML={{ __html: formatMessageText(messageContent.content) }}
                       />
                       
                       {/* AI message icon indicator */}
@@ -514,7 +425,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
                   </div>
                 );
               } catch (error) {
-                console.error('🔧 DEBUG: Error rendering message:', error, message);
+                console.error('Error rendering message:', error, message);
                 return (
                   <div key={message.id} className="p-4 bg-destructive/10 text-destructive rounded-md">
                     Error rendering message. See console for details.
@@ -525,9 +436,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
 
             if (message.type === 'fork') {
               try {
-                console.log(`🔧 DEBUG: Rendering fork node: ${message.id}`);
-                const forkContent = message.content as unknown as ForkContent;
-                console.log('🔧 DEBUG: Fork reason:', forkContent.reason);
+                const forkContent = parseForkContent(message);
                 return (
                   <div key={message.id} className="flex items-center gap-2 py-4 relative">
                     <div className="flex-1 h-px bg-primary/20"></div>
@@ -539,7 +448,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
                   </div>
                 );
               } catch (error) {
-                console.error('🔧 DEBUG: Error parsing fork content:', error, message);
+                console.error('Error parsing fork content:', error, message);
                 return (
                   <div key={message.id} className="p-4 bg-destructive/10 text-destructive rounded-md">
                     Error rendering fork point. See console for details.

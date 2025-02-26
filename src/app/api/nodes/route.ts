@@ -9,33 +9,33 @@ function parseNodeContent(node: any) {
   if (!node) return node;
   
   try {
-    console.log(`Processing node ${node.id} (type: ${node.type})`);
-    console.log(`Content before processing:`, node.content);
-    console.log(`Content type: ${typeof node.content}`);
+    //console.log(`Processing node ${node.id} (type: ${node.type})`);
+    //console.log(`Content before processing:`, node.content);
+    //console.log(`Content type: ${typeof node.content}`);
     
     // If content is a string, parse it to JSON
     if (node.content && typeof node.content === 'string') {
       try {
         // Attempt to parse the string as JSON
         const parsedContent = JSON.parse(node.content);
-        console.log(`Successfully parsed string content to:`, parsedContent);
+        //console.log(`Successfully parsed string content to:`, parsedContent);
         
         // Check if the parsed content has the expected structure
         if (typeof parsedContent === 'object' && parsedContent !== null) {
           if (node.type === 'message' && !('role' in parsedContent)) {
-            console.warn(`Message node ${node.id} missing 'role' in content, adding default`);
+            //console.warn(`Message node ${node.id} missing 'role' in content, adding default`);
             parsedContent.role = 'assistant';
           }
           
           if (node.type === 'message' && !('text' in parsedContent)) {
-            console.warn(`Message node ${node.id} missing 'text' in content, adding empty text`);
+            //console.warn(`Message node ${node.id} missing 'text' in content, adding empty text`);
             parsedContent.text = '';
           }
           
           node.content = parsedContent;
         } else {
           // If parsing succeeded but didn't yield an object, wrap it in proper structure
-          console.warn(`Parsed content is not an object, wrapping in proper structure`);
+          //console.warn(`Parsed content is not an object, wrapping in proper structure`);
           if (node.type === 'message') {
             node.content = {
               text: String(parsedContent),
@@ -45,7 +45,7 @@ function parseNodeContent(node: any) {
         }
       } catch (e) {
         // If parsing fails, leave as is - it might be plain text
-        console.warn(`Failed to parse node ${node.id} content as JSON:`, e);
+        //console.warn(`Failed to parse node ${node.id} content as JSON:`, e);
         
         // For message nodes, ensure proper structure by wrapping plain text
         if (node.type === 'message') {
@@ -53,28 +53,28 @@ function parseNodeContent(node: any) {
             text: node.content,
             role: 'assistant'
           };
-          console.log(`Wrapped plain text in proper message structure`);
+          //console.log(`Wrapped plain text in proper message structure`);
         }
       }
     } else if (node.content && typeof node.content === 'object') {
       // Content is already an object, ensure it has the right structure for messages
       if (node.type === 'message') {
         if (!('role' in node.content)) {
-          console.warn(`Message node ${node.id} missing 'role' in content object, adding default`);
+          //console.warn(`Message node ${node.id} missing 'role' in content object, adding default`);
           node.content.role = 'assistant';
         }
         
         if (!('text' in node.content)) {
-          console.warn(`Message node ${node.id} missing 'text' in content object, adding empty text`);
+          //console.warn(`Message node ${node.id} missing 'text' in content object, adding empty text`);
           node.content.text = '';
         }
       }
     }
     
-    console.log(`Content after processing:`, node.content);
+    //console.log(`Content after processing:`, node.content);
     return node;
   } catch (error) {
-    console.error('Error processing node content:', error);
+    //console.error('Error processing node content:', error);
     return node;
   }
 }
