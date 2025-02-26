@@ -5,7 +5,7 @@ import { TimelineNode } from '@/lib/types/database';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { MessageSquare, GitBranch, User, Bot, Sparkles } from 'lucide-react';
+import { MessageSquare, GitBranch, User, Bot, Sparkles, ArrowDown } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -36,7 +36,7 @@ interface ForkContent {
 }
 
 export function MessageList({ projectId, branchId, onBranchCreated }: MessageListProps) {
-  const [messages, setMessages] = useState<TimelineNode[]>([]);
+  const [allMessages, setAllMessages] = useState<TimelineNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeMessage, setActiveMessage] = useState<string | null>(null);
   const [branchReason, setBranchReason] = useState('');
@@ -44,23 +44,88 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [creatingBranch, setCreatingBranch] = useState(false);
   const [showLoadingIndicator, setShowLoadingIndicator] = useState(false);
+  const [branchTransitions, setBranchTransitions] = useState<{id: string, fromBranch: string, toBranch: string}[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Build a path from root to the current branch node
+  const buildMessagePath = (messages: TimelineNode[], targetBranchId: string | null): TimelineNode[] => {
+    if (!messages.length) return [];
+
+    // If no specific branch is selected, show messages from the main branch
+    if (!targetBranchId) {
+      // Find the root node
+      const rootNode = messages.find(m => m.type === 'root');
+      if (!rootNode) return [];
+      
+      const mainBranchId = rootNode.branch_id;
+      return messages
+        .filter(m => m.branch_id === mainBranchId)
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    }
+    
+    // If a specific branch is selected, build the full path from root to the current branch
+    const result: TimelineNode[] = [];
+    const branchTransitionsMap: {[id: string]: {fromBranch: string, toBranch: string}} = {};
+    
+    // First, find all nodes in the target branch
+    const branchMessages = messages
+      .filter(m => m.branch_id === targetBranchId)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    
+    if (!branchMessages.length) return [];
+    
+    // Find the fork node that created this branch
+    const forkNodes = messages.filter(m => m.type === 'fork' && m.branch_id === targetBranchId);
+    let currentBranchId = targetBranchId;
+    let parentBranchId: string | null = null;
+    
+    if (forkNodes.length > 0) {
+      // Find the parent message that this branch forked from
+      const forkNode = forkNodes[0];
+      const parentMessage = messages.find(m => m.id === forkNode.parent_id);
+      
+      if (parentMessage) {
+        parentBranchId = parentMessage.branch_id;
+        branchTransitionsMap[forkNode.id] = {
+          fromBranch: parentMessage.branch_id,
+          toBranch: targetBranchId
+        };
+        
+        // Recursively build the parent branch path
+        const parentPath = buildMessagePath(messages, parentMessage.branch_id);
+        result.push(...parentPath);
+      }
+    }
+    
+    // Add the branch messages to the result
+    result.push(...branchMessages);
+    
+    // Update branch transitions for UI
+    setBranchTransitions(
+      Object.entries(branchTransitionsMap).map(([id, {fromBranch, toBranch}]) => ({
+        id,
+        fromBranch,
+        toBranch
+      }))
+    );
+    
+    return result
+      .filter((m, i, arr) => arr.findIndex(n => n.id === m.id) === i) // Remove duplicates
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  };
+
+  // Get messages to display based on the current branch
+  const displayedMessages = React.useMemo(() => {
+    return buildMessagePath(allMessages, branchId);
+  }, [allMessages, branchId]);
 
   // Function to fetch messages
   const fetchMessages = async () => {
     console.log('Fetching messages for project:', projectId, 'branch:', branchId || 'main');
     setLoading(true);
     try {
-      // Base URL for fetching messages
-      let url = `/api/nodes?project_id=${projectId}`;
-      
-      // If branchId is provided, fetch messages for that specific branch
-      // Otherwise, fetch the complete tree to get all messages
-      if (branchId) {
-        url += `&branch_id=${branchId}`;
-      } else {
-        url += `&complete_tree=true`;
-      }
+      // Always fetch the complete tree to get all messages, including branch paths
+      const url = `/api/nodes?project_id=${projectId}&complete_tree=true`;
       
       console.log('Fetching from:', url);
       const response = await fetch(url);
@@ -72,8 +137,8 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
       const data = await response.json();
       console.log(`Received ${data.length} messages`);
       
-      // Store messages
-      setMessages(data);
+      // Store all messages
+      setAllMessages(data);
       
       // Hide loading indicator
       setShowLoadingIndicator(false);
@@ -93,10 +158,10 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
   useEffect(() => {
     const interval = setInterval(() => {
       // Only poll if we're possibly waiting for an AI response
-      const lastMessage = messages[messages.length - 1];
+      const lastMessage = displayedMessages[displayedMessages.length - 1];
       if (lastMessage && lastMessage.type === 'message') {
         try {
-          const content = lastMessage.content as unknown as MessageContent;
+          const content = parseMessageContent(lastMessage);
           if (content.role === 'user') {
             setShowLoadingIndicator(true);
             fetchMessages();
@@ -108,47 +173,12 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [messages, projectId, branchId]);
+  }, [displayedMessages]);
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // Filter messages based on the current branch
-  const filteredMessages = React.useMemo(() => {
-    if (!messages.length) return [];
-    
-    // If no specific branch is selected, show messages from all branches
-    // (You might want to adjust this logic based on your requirements)
-    if (!branchId) {
-      // Filter to just show the main branch for now
-      // Find the main branch (usually the first branch created)
-      const branches = new Set(messages.map(m => m.branch_id));
-      console.log('Available branches:', [...branches]);
-      
-      // Look for the root node to identify the main branch
-      const rootNode = messages.find(m => m.type === 'root');
-      if (rootNode) {
-        const mainBranchId = rootNode.branch_id;
-        console.log('Main branch ID:', mainBranchId);
-        
-        return messages
-          .filter(m => m.branch_id === mainBranchId)
-          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      }
-      
-      // Fallback: if no root node found, just show all messages sorted by time
-      return [...messages].sort((a, b) => 
-        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      );
-    }
-    
-    // If a specific branch is selected, filter to show only messages from that branch
-    return messages
-      .filter(m => m.branch_id === branchId)
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-  }, [messages, branchId]);
+  }, [displayedMessages]);
 
   // Safely parse message content with proper error handling
   const parseMessageContent = (node: TimelineNode): MessageContent => {
@@ -260,7 +290,36 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     return formatted;
   };
 
-  if (loading && messages.length === 0) {
+  // Check if a message is at a branch transition
+  const isBranchTransition = (message: TimelineNode, index: number, messages: TimelineNode[]): boolean => {
+    if (index === 0) return false;
+    
+    const prevMessage = messages[index - 1];
+    return prevMessage && prevMessage.branch_id !== message.branch_id;
+  };
+
+  // Get branch color based on branch ID (using a simple hash)
+  const getBranchColor = (branchId: string): string => {
+    const colors = [
+      '#3b82f6', // blue-500 (main line)
+      '#ef4444', // red-500
+      '#10b981', // emerald-500
+      '#f59e0b', // amber-500
+      '#8b5cf6', // violet-500
+      '#ec4899', // pink-500
+      '#06b6d4', // cyan-500
+      '#84cc16', // lime-500
+    ];
+    
+    // Simple hash of branchId to pick a color
+    const hash = branchId.split('').reduce((acc, char) => {
+      return acc + char.charCodeAt(0);
+    }, 0);
+    
+    return colors[hash % colors.length];
+  };
+
+  if (loading && allMessages.length === 0) {
     return (
       <div className="flex justify-center py-8">
         <div className="animate-pulse flex flex-col gap-4 w-full max-w-xl">
@@ -272,7 +331,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     );
   }
 
-  if (messages.length === 0) {
+  if (allMessages.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-[50vh] text-center">
         <MessageSquare className="w-12 h-12 text-muted-foreground mb-4" />
@@ -306,7 +365,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
       if (!response.ok) throw new Error('Failed to create branch');
       
       const result = await response.json();
-      onBranchCreated(result.branch_start_node);
+      onBranchCreated(result.branch_id);
       setBranchDialogOpen(false);
       setBranchReason('');
     } catch (error) {
@@ -318,7 +377,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
 
   return (
    <>
-      <div className="flex flex-col gap-6 max-w-3xl mx-auto p-4 pb-32">
+      <div className="flex flex-col gap-4 max-w-3xl mx-auto p-4 pb-32">
         {/* Branch line visualization */}
         <div className="absolute left-[calc(50%-1px)] top-0 bottom-0 w-2 pointer-events-none">
           <div 
@@ -327,11 +386,53 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
           ></div>
         </div>
         
-        {filteredMessages
+        {displayedMessages
           .map((message, index) => {
             // Skip root nodes as they're not visible messages
             if (message.type === 'root') {
               return null;
+            }
+
+            // Display branch transition indicator
+            const isBranchChange = isBranchTransition(message, index, displayedMessages);
+            if (isBranchChange) {
+              const prevBranchId = displayedMessages[index - 1].branch_id;
+              const currentBranchId = message.branch_id;
+              const prevBranchColor = getBranchColor(prevBranchId);
+              const currentBranchColor = getBranchColor(currentBranchId);
+              
+              // Find the fork node if it exists
+              const forkNode = allMessages.find(
+                n => n.type === 'fork' && 
+                n.branch_id === currentBranchId && 
+                allMessages.some(m => m.id === n.parent_id && m.branch_id === prevBranchId)
+              );
+              
+              const branchReason = forkNode ? parseForkContent(forkNode).reason : 'Branch continuation';
+              
+              return (
+                <div key={`transition-${message.id}`} className="relative my-8">
+                  {/* Branch transition visualization */}
+                  <div className="flex items-center gap-2 py-4 relative">
+                    <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${prevBranchColor}, ${currentBranchColor})` }}></div>
+                    <div 
+                      className="px-4 py-2 text-sm font-medium rounded-full border flex items-center gap-2"
+                      style={{ 
+                        backgroundColor: `${currentBranchColor}20`, 
+                        borderColor: currentBranchColor,
+                        color: currentBranchColor
+                      }}
+                    >
+                      <GitBranch className="h-4 w-4" /> 
+                      {branchReason}
+                    </div>
+                    <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${currentBranchColor}, ${prevBranchColor})` }}></div>
+                  </div>
+                  
+                  {/* Line connection visualization */}
+                  <div className="absolute left-1/2 -top-12 bottom-0 w-0.5" style={{ background: `linear-gradient(to bottom, ${prevBranchColor}, ${currentBranchColor})` }}></div>
+                </div>
+              );
             }
 
             if (message.type === 'message') {
@@ -350,19 +451,25 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
                     onMouseEnter={() => setActiveMessage(message.id)}
                     onMouseLeave={() => setActiveMessage(null)}
                   >
-                    {/* Connection to branch line */}
-                    <div className={cn(
-                      "absolute top-1/2 w-8 h-0.5 bg-primary opacity-20",
-                      isUser ? "right-full" : "left-full"
-                    )}></div>
+                    {/* Connection to branch line - color based on branch */}
+                    <div 
+                      className={cn(
+                        "absolute top-1/2 w-8 h-0.5 opacity-70",
+                        isUser ? "right-full" : "left-full"
+                      )}
+                      style={{ backgroundColor: getBranchColor(message.branch_id) }}
+                    ></div>
                     
                     {/* Avatar */}
-                    <div className={cn(
-                      "absolute top-0 size-8 flex items-center justify-center rounded-full border",
-                      isUser 
-                        ? "right-full mr-4 bg-primary text-primary-foreground" 
-                        : "left-full ml-4 bg-background border-muted"
-                    )}>
+                    <div 
+                      className={cn(
+                        "absolute top-0 size-8 flex items-center justify-center rounded-full border",
+                        isUser 
+                          ? "right-full mr-4 text-primary-foreground" 
+                          : "left-full ml-4 bg-background border-muted"
+                      )}
+                      style={isUser ? { backgroundColor: getBranchColor(message.branch_id) } : {}}
+                    >
                       {isUser ? <User className="size-4" /> : <Bot className="size-4" />}
                     </div>
                     
@@ -370,10 +477,11 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
                       className={cn(
                         "p-4 shadow-sm transition-all duration-200 max-w-[calc(100%-3rem)]",
                         isUser 
-                          ? "bg-primary text-primary-foreground shadow-primary/10" 
+                          ? "text-primary-foreground shadow-primary/10" 
                           : "bg-card border shadow-muted/10",
                         !isUser && "hover:shadow-md"
                       )}
+                      style={isUser ? { backgroundColor: getBranchColor(message.branch_id) } : {}}
                     >
                       <div 
                         className={cn(
@@ -383,7 +491,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
                         dangerouslySetInnerHTML={{ __html: formatMessageText(messageContent.content) }}
                       />
                       
-                      {/* AI message icon indicator */}
+                      {/* AI message footer */}
                       {!isUser && (
                         <div className="mt-3 pt-3 border-t border-muted/20 flex justify-between items-center text-xs text-muted-foreground">
                           <div className="flex items-center gap-1">
@@ -437,10 +545,19 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
             if (message.type === 'fork') {
               try {
                 const forkContent = parseForkContent(message);
+                const branchColor = getBranchColor(message.branch_id);
+                
                 return (
                   <div key={message.id} className="flex items-center gap-2 py-4 relative">
                     <div className="flex-1 h-px bg-primary/20"></div>
-                    <div className="px-4 py-1.5 text-xs font-medium rounded-full bg-primary/10 text-primary border-primary/20 border flex items-center gap-1.5">
+                    <div 
+                      className="px-4 py-1.5 text-xs font-medium rounded-full border flex items-center gap-1.5"
+                      style={{ 
+                        backgroundColor: `${branchColor}20`, 
+                        borderColor: branchColor,
+                        color: branchColor
+                      }}
+                    >
                       <GitBranch className="h-3 w-3 inline-block relative -top-px" /> 
                       {forkContent.reason}
                     </div>
@@ -458,73 +575,54 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
             }
 
             return null;
-          })
-          .filter(Boolean)
-        }
+          })}
         
-        {/* Loading indicator when waiting for AI */}
+        {/* Loading indicator for new messages */}
         {showLoadingIndicator && (
-          <div className="flex justify-center py-4 animate-fadeIn">
-            <div className="flex items-center gap-2 text-sm px-4 py-2 bg-muted/30 rounded-full text-muted-foreground">
-              <div className="animate-pulse h-2 w-2 bg-primary rounded-full"></div>
-              <div className="animate-pulse h-2 w-2 bg-primary rounded-full" style={{ animationDelay: '0.2s' }}></div>
-              <div className="animate-pulse h-2 w-2 bg-primary rounded-full" style={{ animationDelay: '0.4s' }}></div>
-              <span className="ml-2">Waiting for response...</span>
+          <div className="flex justify-center py-4">
+            <div className="animate-pulse flex gap-1">
+              <div className="bg-primary/30 rounded-full h-2 w-2"></div>
+              <div className="bg-primary/30 rounded-full h-2 w-2 animate-delay-200"></div>
+              <div className="bg-primary/30 rounded-full h-2 w-2 animate-delay-400"></div>
             </div>
           </div>
         )}
         
-        {/* Bottom ref for scrolling */}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Branch creation dialog */}
       <Dialog open={branchDialogOpen} onOpenChange={setBranchDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle className="flex items-center">
-              <GitBranch className="h-5 w-5 mr-2" />
-              Create New Branch
-            </DialogTitle>
+            <DialogTitle>Create a new branch</DialogTitle>
             <DialogDescription>
-              Create a new conversation branch from this point. This will allow you to explore
-              alternative paths of the conversation.
+              Create a new conversation branch from this point. This allows you to explore a different direction without losing the original conversation.
             </DialogDescription>
           </DialogHeader>
-          
-          <div className="py-4">
-            <Label htmlFor="branch-reason">Branch Name/Reason</Label>
-            <Input
-              id="branch-reason"
-              value={branchReason}
-              onChange={(e) => setBranchReason(e.target.value)}
-              placeholder="Exploring alternative approach..."
-              className="mt-2"
-              autoFocus
-            />
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="branch-reason">Branch reason (optional)</Label>
+              <Input
+                id="branch-reason"
+                placeholder="e.g., Alternative approach, What-if scenario"
+                value={branchReason}
+                onChange={(e) => setBranchReason(e.target.value)}
+              />
+            </div>
           </div>
-          
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setBranchDialogOpen(false)}
-              disabled={creatingBranch}
-            >
-              Cancel
-            </Button>
+            <Button variant="outline" onClick={() => setBranchDialogOpen(false)}>Cancel</Button>
             <Button 
-              onClick={createBranch}
+              onClick={createBranch} 
               disabled={creatingBranch}
-              className="gap-1.5"
+              className="gap-1"
             >
               {creatingBranch ? (
-                <>
-                  <div className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full"></div>
-                  Creating...
-                </>
+                <>Creating<span className="animate-pulse">...</span></>
               ) : (
                 <>
-                  <GitBranch className="h-4 w-4" />
+                  <GitBranch className="h-4 w-4 mr-1" />
                   Create Branch
                 </>
               )}
@@ -532,6 +630,6 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+   </>
   );
 } 

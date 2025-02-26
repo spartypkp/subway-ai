@@ -85,176 +85,73 @@ function parseNodeContent(node: any) {
  * Supports the following query parameters:
  * - project_id (required): The project to fetch nodes for
  * - branch_id: Fetch nodes for a specific branch
- * - root: When 'true', fetch the root node and its direct children
- * - all: When 'true', fetch all nodes for the project
  * - complete_tree: When 'true', fetch the complete conversation tree including all branches
  */
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('project_id');
-  const branchId = searchParams.get('branch_id');
-  const root = searchParams.get('root') === 'true';
-  const all = searchParams.get('all') === 'true';
   const completeTree = searchParams.get('complete_tree') === 'true';
+  const branchId = searchParams.get('branch_id');
   
-  // Legacy parameter - deprecated
-  const expertId = searchParams.get('expert_id');
-
   if (!projectId) {
-    return NextResponse.json({ error: 'project_id is required' }, { status: 400 });
+    return NextResponse.json({ error: 'Project ID is required' }, { status: 400 });
   }
 
   try {
-    let result;
-
-    // Fetch complete conversation tree for the project
-    if (completeTree) {
-      console.log('Fetching complete conversation tree for project:', projectId);
-      
-      // First get the root node
-      const rootResult = await query(
-        `SELECT * FROM timeline_nodes 
-         WHERE project_id = $1 AND type = 'root'
-         LIMIT 1`,
-        [projectId]
-      );
-      
-      if (rootResult.rows.length === 0) {
-        return NextResponse.json([], { status: 200 });
-      }
-      
-      const rootNode = rootResult.rows[0];
-      
-      // Use a recursive CTE to get all nodes connected to the root
-      const treeResult = await query(
-        `WITH RECURSIVE conversation_tree AS (
-           -- Base case: start with the root node
-           SELECT * FROM timeline_nodes 
-           WHERE id = $1
-           
-           UNION ALL
-           
-           -- Recursive case: get all children of nodes already in the tree
-           SELECT n.* 
-           FROM timeline_nodes n
-           JOIN conversation_tree p ON n.parent_id = p.id
-         )
-         SELECT * FROM conversation_tree
-         ORDER BY created_at ASC`,
-        [rootNode.id]
-      );
-      
-      console.log(`Found ${treeResult.rows.length} nodes in the complete conversation tree`);
-      
-      // Process content field for each node
-      const processedNodes = treeResult.rows.map(parseNodeContent);
-      
-      return NextResponse.json(processedNodes);
-    }
-
-    // Fetch all nodes for the project
-    if (all) {
-      result = await query(
-        `SELECT * FROM timeline_nodes 
-         WHERE project_id = $1
-         ORDER BY created_at ASC`,
-        [projectId]
-      );
-      
-      // Process content field for each node
-      const processedNodes = result.rows.map(parseNodeContent);
-      
-      return NextResponse.json(processedNodes);
-    }
-
-    // Fetch root node only
-    if (root) {
-      result = await query(
-        `SELECT * FROM timeline_nodes 
-         WHERE project_id = $1 AND type = 'root'
-         LIMIT 1`,
-        [projectId]
-      );
-
-      if (result.rows.length > 0) {
-        const rootNode = parseNodeContent(result.rows[0]);
-        
-        // Find first level of messages (direct children of root)
-        const childrenResult = await query(
-          `SELECT * FROM timeline_nodes 
-           WHERE project_id = $1 AND parent_id = $2
-           ORDER BY created_at ASC`,
-          [projectId, rootNode.id]
-        );
-        
-        const processedChildren = childrenResult.rows.map(parseNodeContent);
-        
-        return NextResponse.json([rootNode, ...processedChildren]);
-      }
-      
-      return NextResponse.json([]);
-    }
-
-    // Fetch branch starting from a specific node
-    if (branchId) {
-      // First, get the branch node itself
-      const branchNodeResult = await query(
-        `SELECT * FROM timeline_nodes 
-         WHERE project_id = $1 AND id = $2`,
-        [projectId, branchId]
-      );
-      
-      if (branchNodeResult.rows.length === 0) {
-        return NextResponse.json({ error: 'Branch not found' }, { status: 404 });
-      }
-      
-      // Get all messages in the branch (finding all nodes connected to this branch)
-      // This is a recursive query to find all descendants
-      const branchMessages = await query(
-        `WITH RECURSIVE branch_messages AS (
-           SELECT * FROM timeline_nodes WHERE id = $1
-           UNION
-           SELECT n.* FROM timeline_nodes n
-           INNER JOIN branch_messages b ON n.parent_id = b.id
-         )
-         SELECT * FROM branch_messages
-         ORDER BY created_at ASC`,
-        [branchId]
-      );
-      
-      const processedBranchNodes = branchMessages.rows.map(parseNodeContent);
-      
-      return NextResponse.json(processedBranchNodes);
-    }
-
-    // Legacy support for expert-based querying - DEPRECATED
-    if (expertId) {
-      console.warn('Expert-based querying is deprecated and will be removed in future versions');
-      result = await query(
-        `SELECT * FROM timeline_nodes 
-         WHERE project_id = $1
-         ORDER BY created_at ASC`,
-        [projectId]
-      );
-      
-      const processedNodes = result.rows.map(parseNodeContent);
-      
-      return NextResponse.json(processedNodes);
-    }
-
-    // Default: return all nodes for the project
-    result = await query(
-      `SELECT * FROM timeline_nodes 
-       WHERE project_id = $1
-       ORDER BY created_at ASC`,
-      [projectId]
-    );
+    // First fetch branches for the project
+    const branchesResult = await query(`
+      SELECT b.*, 
+             p.branch_id AS parent_branch,
+             (SELECT COUNT(c.id) FROM branches c WHERE c.parent_branch_id = b.id) AS child_branch_count
+      FROM branches b
+      LEFT JOIN timeline_nodes p ON b.branch_point_node_id = p.id
+      WHERE b.project_id = $1
+      ORDER BY b.depth ASC
+    `, [projectId]);
     
-    const processedNodes = result.rows.map(parseNodeContent);
+    const branches = branchesResult.rows;
     
-    return NextResponse.json(processedNodes);
+    // Then fetch nodes with branch information
+    let nodesQuery = `
+      SELECT n.*,
+             b.color AS branch_color,
+             b.depth AS branch_depth,
+             b.parent_branch_id,
+             b.name AS branch_name
+      FROM timeline_nodes n
+      JOIN branches b ON n.branch_id = b.id
+      WHERE n.project_id = $1
+    `;
+    
+    const queryParams = [projectId];
+    
+    // Add branch filtering if requested and not getting the complete tree
+    if (branchId && !completeTree) {
+      nodesQuery += ` AND n.branch_id = $2`;
+      queryParams.push(branchId);
+    }
+    
+    nodesQuery += ` ORDER BY n.branch_id, n.position`;
+    
+    const nodesResult = await query(nodesQuery, queryParams);
+    const nodes = nodesResult.rows.map(node => {
+      // Convert message_text to the expected content format for backward compatibility
+      if (node.type === 'user-message' || node.type === 'assistant-message') {
+        const role = node.type === 'user-message' ? 'user' : 'assistant';
+        node.content = {
+          role,
+          text: node.message_text || ''
+        };
+      }
+      return node;
+    });
+
+    return NextResponse.json({
+      branches,
+      nodes
+    });
   } catch (error) {
-    console.error('Database error:', error);
-    return NextResponse.json({ error: 'Database error' }, { status: 500 });
+    console.error('Error fetching nodes:', error);
+    return NextResponse.json({ error: 'Failed to fetch nodes' }, { status: 500 });
   }
-} 
+}

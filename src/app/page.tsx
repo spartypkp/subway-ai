@@ -7,15 +7,16 @@ import { Minimap } from "@/components/minimap";
 import { ChatControls } from "@/components/chat/chatControls";
 import { MessageList } from "@/components/chat/messageList";
 import { Button } from "@/components/ui/button";
-import { PlusIcon, Menu, Train, MessageSquare, GitBranch, Map } from "lucide-react";
+import { PlusIcon, Menu, Train, GitBranch, Map } from "lucide-react";
 import { Project } from "@/lib/types/database";
 import { H1 } from "@/components/ui/typography";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardHeader } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { TimelineNode } from "@/lib/types/database";
+import { ReactFlowProvider } from "reactflow";
 
 export default function Home() {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -42,9 +43,6 @@ export default function Home() {
 				const response = await fetch("/api/projects");
 				const data = await response.json();
 				console.log('🔍 DEBUG: Projects fetched:', data.length, 'projects');
-				data.forEach((project: Project, index: number) => {
-					console.log(`🔍 DEBUG: Project ${index + 1}:`, project.id, project.title);
-				});
 				
 				setProjects(data);
 				
@@ -63,16 +61,6 @@ export default function Home() {
 		fetchProjects();
 	}, [selectedProjectId]);
 
-	// Log whenever selectedProjectId changes
-	useEffect(() => {
-		console.log('🔍 DEBUG: Selected project changed to:', selectedProjectId);
-	}, [selectedProjectId]);
-	
-	// Log whenever currentBranchId changes
-	useEffect(() => {
-		console.log('🔍 DEBUG: Current branch changed to:', currentBranchId);
-	}, [currentBranchId]);
-
 	// Fetch main branch ID when project is selected
 	useEffect(() => {
 		const fetchMainBranch = async () => {
@@ -82,7 +70,6 @@ export default function Home() {
 			try {
 				const response = await fetch(`/api/nodes?project_id=${selectedProjectId}&root=true`);
 				const data = await response.json();
-				console.log('🔍 DEBUG: Root node response:', data);
 				
 				// Find the root node
 				const rootNode = data.find((node: TimelineNode) => node.type === 'root');
@@ -129,7 +116,7 @@ export default function Home() {
 
 	return (
 		<main className="flex flex-col h-screen max-h-screen bg-background">
-			<header className="border-b flex justify-between items-center p-4 shrink-0">
+			<header className="border-b flex justify-between items-center p-3 shrink-0">
 				<div className="flex items-center gap-3">
 					<Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>
 						<SheetTrigger asChild>
@@ -191,12 +178,23 @@ export default function Home() {
 												<Train className="h-4 w-4" />
 												Subway Map
 											</h3>
-											<div className="h-[40vh]">
-												<Minimap
-													projectId={selectedProjectId}
-													currentBranchId={currentBranchId}
-													onSelectBranch={handleBranchSelect}
-												/>
+											<div className="h-[40vh] border rounded-md overflow-hidden">
+												{loading ? (
+													<div className="h-full w-full flex items-center justify-center bg-muted/10">
+														<div className="animate-pulse flex flex-col items-center gap-2">
+															<Train className="h-5 w-5 text-muted-foreground" />
+															<div className="h-2 w-24 bg-muted rounded-full"></div>
+														</div>
+													</div>
+												) : (
+													<ReactFlowProvider key={`flow-mobile-${selectedProjectId}`}>
+														<Minimap
+															projectId={selectedProjectId}
+															currentBranchId={currentBranchId}
+															onSelectBranch={handleBranchSelect}
+														/>
+													</ReactFlowProvider>
+												)}
 											</div>
 										</div>
 									</>
@@ -222,8 +220,9 @@ export default function Home() {
 						</SheetContent>
 					</Sheet>
 					
-					<div>
-						<H1 className="text-xl font-bold md:text-2xl">
+					<div className="flex items-center">
+						<H1 className="text-xl font-bold md:text-2xl flex items-center gap-2">
+							<Train className="h-5 w-5 text-primary hidden sm:inline-block" />
 							{selectedProject ? (
 								selectedProject.title
 							) : loading ? (
@@ -238,6 +237,7 @@ export default function Home() {
 				<div className="flex gap-2">
 					<Button
 						variant="outline"
+						size="sm"
 						onClick={() => setIsCreateDialogOpen(true)}
 					>
 						<PlusIcon className="h-4 w-4 mr-2" />
@@ -247,104 +247,66 @@ export default function Home() {
 			</header>
 			
 			<div className="flex flex-1 overflow-hidden">
-				{/* Desktop Sidebar */}
-				<div className="hidden md:flex md:w-[300px] border-r flex-col overflow-hidden p-4">
-					{/* <div className="flex items-center justify-between mb-4">
-						<h3 className="font-medium flex items-center gap-2">
-							<Map className="h-4 w-4" />
-							Projects
-						</h3>
-						<Button
-							variant="ghost"
-							size="sm"
-							onClick={() => setIsCreateDialogOpen(true)}
-						>
-							<PlusIcon className="h-4 w-4 mr-1" />
-							New
-						</Button>
-					</div>
-					
-					{loading ? (
-						<div className="space-y-2">
-							<Skeleton className="h-10 w-full" />
-							<Skeleton className="h-10 w-full" />
+				{/* Desktop Subway Map */}
+				<div className="hidden md:flex w-3/5 border-r flex-col overflow-hidden">
+					{selectedProjectId ? (
+						<div className="h-full w-full">
+							{loading ? (
+								<div className="h-full w-full flex items-center justify-center">
+									<div className="animate-pulse flex flex-col items-center gap-3">
+										<Train className="h-8 w-8 text-primary/30" />
+										<div className="h-2 w-32 bg-muted rounded-full"></div>
+										<div className="h-2 w-40 bg-muted rounded-full mt-2"></div>
+									</div>
+								</div>
+							) : (
+								<ReactFlowProvider key={`flow-desktop-${selectedProjectId}`}>
+									<Minimap
+										projectId={selectedProjectId}
+										currentBranchId={currentBranchId}
+										onSelectBranch={handleBranchSelect}
+									/>
+								</ReactFlowProvider>
+							)}
 						</div>
 					) : (
-						<ScrollArea className="h-[20vh]">
-							<div className="space-y-1 pr-2">
-								{projects.map((project) => (
-									<Button
-										key={project.id}
-										variant={project.id === selectedProjectId ? "secondary" : "ghost"}
-										className="w-full justify-start font-normal"
-										onClick={() => {
-											setSelectedProjectId(project.id);
-											setCurrentBranchId(null);
-										}}
-									>
-										{project.title}
-									</Button>
-								))}
+						<div className="flex items-center justify-center h-full text-center">
+							<div>
+								<Train className="h-8 w-8 mx-auto mb-3 text-primary opacity-80" />
+								<p className="text-muted-foreground">
+									Select a project to view the subway map
+								</p>
 							</div>
-						</ScrollArea>
-					)} */}
-					
-					<div className="mt-6 border-t pt-4 flex-1 overflow-hidden">
-						<h3 className="font-medium mb-3 flex items-center gap-2">
-							<Train className="h-4 w-4" /> 
-							Subway Map
-						</h3>
-						{selectedProjectId ? (
-							<div className="h-[calc(100%-3rem)]">
-								<Minimap
-									projectId={selectedProjectId}
-									currentBranchId={currentBranchId}
-									onSelectBranch={handleBranchSelect}
-								/>
-							</div>
-						) : (
-							<div className="flex items-center justify-center h-40 text-center">
-								<div>
-									<Train className="h-6 w-6 mx-auto mb-2 text-muted-foreground opacity-80" />
-									<p className="text-muted-foreground text-sm">
-										Select a project to view the subway map
-									</p>
-								</div>
-							</div>
-						)}
-					</div>
+						</div>
+					)}
 				</div>
 				
 				{/* Main Content Area */}
-				<div className="flex-1 flex flex-col overflow-hidden">
+				<div className="flex-1 flex w-full md:w-2/5 flex-col overflow-hidden">
 					{selectedProject ? (
 						<div className="flex flex-col h-full">
-							{/* Project Info Card */}
+							{/* Branch Info */}
 							{currentBranchId && (
-								<Card className="m-4 bg-muted/30 border-muted">
-									<CardHeader className="py-3 px-4">
-										<div className="flex items-center justify-between">
-											<div className="flex items-center gap-2">
-												<GitBranch className="h-4 w-4 text-primary" />
-												<span className="text-sm font-medium">
-													Branch Active
-												</span>
-											</div>
-											<Button 
-												variant="ghost" 
-												size="sm" 
-												onClick={() => setCurrentBranchId(null)}
-												className="h-8 text-xs"
-											>
-												<Train className="h-3.5 w-3.5 mr-1.5" />
-												Return to Main Line
-											</Button>
-										</div>
-									</CardHeader>
-								</Card>
+								<div className="px-4 pt-3 pb-2 flex items-center justify-between border-b">
+									<div className="flex items-center gap-2">
+										<GitBranch className="h-4 w-4 text-primary" />
+										<span className="text-sm font-medium">
+											Branch Active
+										</span>
+									</div>
+									<Button 
+										variant="ghost" 
+										size="sm" 
+										onClick={() => setCurrentBranchId(null)}
+										className="h-7 text-xs"
+									>
+										<Train className="h-3.5 w-3.5 mr-1.5" />
+										Return to Main Line
+									</Button>
+								</div>
 							)}
 							
-							{/* Chat Area - using a flex layout to position message list and controls */}
+							{/* Chat Area */}
 							<div className="flex-1 overflow-hidden flex flex-col">
 								<div className="flex-1 overflow-y-auto pb-2">
 									<MessageList 
@@ -354,9 +316,9 @@ export default function Home() {
 									/>
 								</div>
 								
-								{/* Chat Controls - fixed at bottom */}
+								{/* Chat Controls */}
 								<div className="border-t bg-background/95 backdrop-blur-sm">
-									<div className="max-w-3xl mx-auto">
+									<div className="mx-auto">
 										<ChatControls
 											projectId={selectedProjectId || ''}
 											branchId={currentBranchId}
