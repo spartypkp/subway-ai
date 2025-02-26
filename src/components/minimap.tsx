@@ -486,7 +486,7 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       branchMap.set(branch.id, {
         depth: branch.depth,
         color: branch.color || getBranchColor(branch.depth),
-        nodes: [],
+            nodes: [],
         branch,
         xPosition
       });
@@ -949,33 +949,33 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
   }, [onSelectBranch]);
   
   // Center view on the active branch when it changes
-  useEffect(() => {
-    if (!loading && reactFlowInstance) {
-      // Zoom to fit all nodes with a little padding
-      reactFlowInstance.fitView({ padding: 0.2, includeHiddenNodes: false });
+//   useEffect(() => {
+//     if (!loading && reactFlowInstance) {
+//       // Zoom to fit all nodes with a little padding
+//       reactFlowInstance.fitView({ padding: 0.2, includeHiddenNodes: false });
       
-      // If we have a current branch, try to center on it
-      if (currentBranchId) {
-        // Find a node in the current branch
-        const branchNode = nodes.find(node => 
-          node.data.branchId === currentBranchId
-        );
+//       // If we have a current branch, try to center on it
+//       if (currentBranchId) {
+//         // Find a node in the current branch
+//         const branchNode = nodes.find(node => 
+//           node.data.branchId === currentBranchId
+//         );
         
-        if (branchNode) {
-          // Center on this branch's x-position, keeping the vertical position
-          const centerY = reactFlowInstance.getViewport().y;
-          reactFlowInstance.setCenter(branchNode.position.x, centerY, { 
-            zoom: 0.85, // Slightly zoomed in for better visibility
-            duration: 800 
-          });
-        }
-      }
-    }
-  }, [currentBranchId, loading, nodes, reactFlowInstance]);
+//         if (branchNode) {
+//           // Center on this branch's x-position, keeping the vertical position
+//           const centerY = reactFlowInstance.getViewport().y;
+//           reactFlowInstance.setCenter(branchNode.position.x, centerY, { 
+//             zoom: 0.85, // Slightly zoomed in for better visibility
+//             duration: 800 
+//           });
+//         }
+//       }
+//     }
+//   }, [currentBranchId, loading, nodes, reactFlowInstance]);
   
   // Loading state
   if (loading && nodes.length === 0) {
-    return (
+                return (
       <div className="flex flex-col items-center justify-center h-full p-4">
         <div className="subway-loading-animation mb-6">
           <div className="subway-line"></div>
@@ -1010,8 +1010,8 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       });
     }
   });
-  
-  return (
+                
+                return (
     <div className="h-full w-full relative">
       <style jsx global>{`
         /* Custom subway-themed background */
@@ -1125,7 +1125,7 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
             {Array.from(branchColors.entries()).map(([branchId, { color, name }]) => (
               <div 
                 key={branchId}
-                className={cn(
+                              className={cn(
                   "flex items-center py-1 px-2 text-xs rounded-sm cursor-pointer transition-colors",
                   branchId === currentBranchId ? "bg-gray-100" : "hover:bg-gray-50"
                 )}
@@ -1141,9 +1141,9 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
                 {branchId === currentBranchId && (
                   <div className="ml-auto">
                     <div className="w-2 h-2 rounded-full bg-primary" />
-                  </div>
-                )}
-              </div>
+          </div>
+        )}
+      </div>
             ))}
           </div>
         </div>

@@ -100,7 +100,7 @@ INSERT INTO timeline_nodes (
     NOW() + interval '3 minutes'
 );
 
--- Second assistant response (this will become a branch point later)
+-- Second assistant response (keeping this as an assistant message)
 INSERT INTO timeline_nodes (
     id, project_id, branch_id, parent_id, type, message_text, message_role, position, created_by, created_at
 ) VALUES (
@@ -131,10 +131,21 @@ Would you like to know more about the technical implementation?',
     NOW() + interval '4 minutes'
 );
 
--- 5. Create a branch point from the second assistant response
-UPDATE timeline_nodes 
-SET type = 'branch-point' 
-WHERE id = '123e4567-e89b-12d3-a456-426614174014';
+-- 5. Create a separate branch point after the assistant message
+INSERT INTO timeline_nodes (
+    id, project_id, branch_id, parent_id, type, message_text, message_role, position, created_by, created_at
+) VALUES (
+    '123e4567-e89b-12d3-a456-426614174015',
+    '123e4567-e89b-12d3-a456-426614174000',
+    '123e4567-e89b-12d3-a456-426614174001',
+    '123e4567-e89b-12d3-a456-426614174014',
+    'branch-point',
+    NULL, -- Branch points don't need message content
+    'system',
+    5, -- Next position after the assistant message
+    'seed_script',
+    NOW() + interval '4.5 minutes'
+);
 
 -- 6. Create a child branch that stems from that branch point
 INSERT INTO branches (
@@ -145,7 +156,7 @@ INSERT INTO branches (
     '123e4567-e89b-12d3-a456-426614174000',
     'Technical Details',
     '123e4567-e89b-12d3-a456-426614174001',
-    '123e4567-e89b-12d3-a456-426614174014',
+    '123e4567-e89b-12d3-a456-426614174015', -- Using the dedicated branch-point node
     '#ef4444', -- red-500
     1,         -- depth 1 for first branch
     true,
@@ -160,7 +171,7 @@ INSERT INTO timeline_nodes (
     '123e4567-e89b-12d3-a456-426614174020',
     '123e4567-e89b-12d3-a456-426614174000',
     '123e4567-e89b-12d3-a456-426614174002',
-    '123e4567-e89b-12d3-a456-426614174014',
+    '123e4567-e89b-12d3-a456-426614174015', -- Parent is the branch point, not the assistant message
     'branch-root',
     'Branch starting point',
     'system',
@@ -229,18 +240,18 @@ Would you like me to elaborate on any specific aspect of the implementation?',
 );
 
 -- 9. Continue conversation in the main branch after the branch point
--- Third user message in main branch
+-- Third user message in main branch - now connects to the branch point instead of the assistant message
 INSERT INTO timeline_nodes (
     id, project_id, branch_id, parent_id, type, message_text, message_role, position, created_by, created_at
 ) VALUES (
     '123e4567-e89b-12d3-a456-426614174016',
     '123e4567-e89b-12d3-a456-426614174000',
     '123e4567-e89b-12d3-a456-426614174001',
-    '123e4567-e89b-12d3-a456-426614174014',
+    '123e4567-e89b-12d3-a456-426614174015', -- Parent is the branch point now
     'user-message',
     'I''m more interested in the user experience aspects. How do you think users will interact with this subway map metaphor? Will it be intuitive?',
     'user',
-    5,
+    6, -- Position is now 6 (after branch point at 5)
     'user123',
     NOW() + interval '8 minutes'
 );
@@ -281,11 +292,11 @@ INSERT INTO timeline_nodes (
 5. **Potential challenges**:
    - Mobile adaptation will be tricky due to limited screen space
    - Very complex conversations might become visually overwhelming
-   - Users might lose track of which branch they're currently in
+   - Users might lose track of which branch they''re currently in
 
 Overall, I think with proper implementation, the subway metaphor can become quite intuitive after a short learning period, especially for knowledge workers and those who engage in complex conversations with AI.',
     'assistant',
-    6,
+    7, -- Position is now 7 
     'ai',
     NOW() + interval '9 minutes'
 ); 

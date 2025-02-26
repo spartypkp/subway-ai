@@ -1,30 +1,66 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { TimelineNode, Branch, NodeType } from '@/lib/types/database';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { MessageSquare, GitBranch, User, Bot, Sparkles, ArrowDown } from 'lucide-react';
+import { 
+  MessageSquare, 
+  GitBranch, 
+  User, 
+  Bot, 
+  Sparkles, 
+  Train, 
+  ChevronRight, 
+  ArrowRight, 
+  CornerDownRight,
+  ArrowLeft,
+  ExternalLink,
+  SwitchCamera
+} from 'lucide-react';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface MessageListProps {
   projectId: string;
   branchId: string | null;
   onBranchCreated: (newBranchId: string) => void;
+  onBranchSwitch?: (branchId: string) => void; // New prop for branch switching
+  onMessageSelect?: (messageId: string) => void; // For minimap integration
 }
 
-export function MessageList({ projectId, branchId, onBranchCreated }: MessageListProps) {
+interface BranchPointInfo {
+  parentBranchId: string;
+  childBranchId: string;
+  childBranchName: string | null;
+  messageId: string;
+  position: number;
+  parentBranchColor: string;
+  childBranchColor: string;
+}
+
+export function MessageList({ 
+  projectId, 
+  branchId, 
+  onBranchCreated, 
+  onBranchSwitch, 
+  onMessageSelect 
+}: MessageListProps) {
   const [allMessages, setAllMessages] = useState<TimelineNode[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +72,29 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
   const [showLoadingIndicator, setShowLoadingIndicator] = useState(false);
   const [branchTransitions, setBranchTransitions] = useState<{id: string, fromBranch: string, toBranch: string}[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [scrollToBottomVisible, setScrollToBottomVisible] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [branchPoints, setBranchPoints] = useState<BranchPointInfo[]>([]);
+  const [availableBranches, setAvailableBranches] = useState<Branch[]>([]);
+  
+  // New state for subway track segments
+  const [trackSegments, setTrackSegments] = useState<Array<{
+    id: string;
+    startY: number;
+    endY: number;
+    color: string;
+    branchId: string;
+  }>>([]);
+
+  // Add a transition flag state
+  const [isTransitioning, setIsTransitioning] = useState(false);
+
+  // Add this near the scrollToBottomVisible state
+  const [showBranchSwitchIndicator, setShowBranchSwitchIndicator] = useState(false);
+  const [switchTargetBranchName, setSwitchTargetBranchName] = useState<string | null>(null);
+
+  // Add an additional state to track branch switching specifically
+  const [isSwitchingBranch, setIsSwitchingBranch] = useState(false);
 
   // Build a path from root to the current branch node
   const buildMessagePath = (messages: TimelineNode[], branches: Branch[], targetBranchId: string | null): TimelineNode[] => {
@@ -91,25 +150,77 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     }
     
     // Add the branch messages to the result, excluding the branch-root node
-    result.push(...branchMessages.filter(m => m.type !== 'branch-root'));
+    // Find the first user message in the branch to ensure it's shown first
+    const nonBranchRootMessages = branchMessages.filter(m => m.type !== 'branch-root');
     
-    // Update branch transitions for UI
-    setBranchTransitions(
-      Object.entries(branchTransitionsMap).map(([id, {fromBranch, toBranch}]) => ({
-        id,
-        fromBranch,
-        toBranch
-      }))
+    // Sort messages to ensure correct order after branch switch
+    const sortedMessages = nonBranchRootMessages.sort((a, b) => 
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
     
-    return result
-      .filter((m, i, arr) => arr.findIndex(n => n.id === m.id) === i) // Remove duplicates
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    result.push(...sortedMessages);
+    
+    // Process branch transitions
+    const transitions = Object.entries(branchTransitionsMap).map(([id, { fromBranch, toBranch }]) => ({
+      id,
+      fromBranch,
+      toBranch
+    }));
+    
+    setBranchTransitions(transitions);
+    
+    return result;
   };
 
   // Get messages to display based on the current branch
   const displayedMessages = React.useMemo(() => {
     return buildMessagePath(allMessages, branches, branchId);
+  }, [allMessages, branches, branchId]);
+
+  // Find and track all branch points in the conversation
+  useEffect(() => {
+    if (!allMessages.length || !branches.length) return;
+    
+    // Find branches that have been created from messages in the current branch path
+    const branchPointsInfo: BranchPointInfo[] = [];
+    
+    branches.forEach(branch => {
+      if (branch.parent_branch_id && branch.branch_point_node_id) {
+        // Find the branch point message
+        const branchPointMessage = allMessages.find(m => m.id === branch.branch_point_node_id);
+        if (!branchPointMessage) return;
+        
+        // Get parent and child branch colors
+        const parentBranchColor = getBranchColor(branch.parent_branch_id);
+        const childBranchColor = getBranchColor(branch.id);
+        
+        branchPointsInfo.push({
+          parentBranchId: branch.parent_branch_id,
+          childBranchId: branch.id,
+          childBranchName: branch.name,
+          messageId: branch.branch_point_node_id,
+          position: branchPointMessage.position,
+          parentBranchColor,
+          childBranchColor
+        });
+      }
+    });
+    
+    setBranchPoints(branchPointsInfo);
+    
+    // Also track available branches from the current branch path
+    if (branchId) {
+      // Find all branches that stem from the current branch
+      const childBranches = branches.filter(b => b.parent_branch_id === branchId);
+      setAvailableBranches(childBranches);
+    } else {
+      // If we're on the main branch, find all top-level branches
+      const mainBranch = branches.find(b => b.depth === 0);
+      if (mainBranch) {
+        const childBranches = branches.filter(b => b.parent_branch_id === mainBranch.id);
+        setAvailableBranches(childBranches);
+      }
+    }
   }, [allMessages, branches, branchId]);
 
   // Function to fetch messages
@@ -148,6 +259,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     } finally {
       setLoading(false);
     }
+    return true; // Return a resolved promise value
   };
 
   // Fetch messages when project or branch changes
@@ -161,7 +273,7 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
       // Only poll if we're possibly waiting for an AI response
       const lastMessage = displayedMessages[displayedMessages.length - 1];
       if (lastMessage && (lastMessage.type === 'user-message')) {
-        setShowLoadingIndicator(true);
+            setShowLoadingIndicator(true);
         fetchMessages();
       }
     }, 3000);
@@ -169,10 +281,41 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     return () => clearInterval(interval);
   }, [displayedMessages]);
 
-  // Scroll to bottom when new messages arrive
+  // Handle scroll events to show/hide scroll to bottom button
   useEffect(() => {
+    const handleScroll = () => {
+      if (!scrollContainerRef.current) return;
+      
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+      const isBottomVisible = scrollHeight - scrollTop - clientHeight < 100;
+      setScrollToBottomVisible(!isBottomVisible && scrollHeight > clientHeight + 300);
+    };
+    
+    const scrollContainer = scrollContainerRef.current;
+    if (scrollContainer) {
+      scrollContainer.addEventListener('scroll', handleScroll);
+      return () => scrollContainer.removeEventListener('scroll', handleScroll);
+    }
+  }, []);
+
+  // Scroll to bottom when new messages arrive or when explicitly requested
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [displayedMessages]);
+  };
+
+  useEffect(() => {
+    if (!loading && displayedMessages.length > 0) {
+      // Only auto-scroll if we're already near the bottom
+      if (scrollContainerRef.current) {
+        const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+        const isBottomVisible = scrollHeight - scrollTop - clientHeight < 200;
+        
+        if (isBottomVisible) {
+          scrollToBottom();
+        }
+      }
+    }
+  }, [displayedMessages, loading]);
 
   // Format message text with markdown-like formatting
   const formatMessageText = (text: string): string => {
@@ -193,12 +336,18 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     return formatted;
   };
 
-  // Check if a message is at a branch transition
+  // Update the isBranchTransition function to be smarter about transitions
   const isBranchTransition = (message: TimelineNode, index: number, messages: TimelineNode[]): boolean => {
     if (index === 0) return false;
     
     const prevMessage = messages[index - 1];
-    return prevMessage && prevMessage.branch_id !== message.branch_id;
+    
+    // If we've switched from one branch to another, and this isn't a duplicate branch point
+    return prevMessage && 
+           prevMessage.branch_id !== message.branch_id && 
+           !branchTransitions.some(transition => 
+             transition.toBranch === message.branch_id && 
+             transition.id === prevMessage.id);
   };
 
   // Get branch color based on branch ID or from branch data
@@ -229,6 +378,173 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     return colors[hash % colors.length];
   };
 
+  // Get branch name from branchId
+  const getBranchName = (branchId: string): string => {
+    const branch = branches.find(b => b.id === branchId);
+    return branch?.name || 'Unnamed Branch';
+  };
+
+  // Get message station number (position in the conversation)
+  const getStationNumber = (message: TimelineNode, index: number, messages: TimelineNode[]): number => {
+    // Count only user and assistant messages
+    return messages.slice(0, index + 1).filter(
+      m => m.type === 'user-message' || m.type === 'assistant-message'
+    ).length;
+  };
+
+  // Add function to render the unified subway track
+  const renderSubwayTrack = () => {
+    return (
+      <div className="absolute left-1/2 transform -translate-x-1/2 top-0 bottom-0 w-4 pointer-events-none z-0">
+        {trackSegments.map(segment => (
+          <div 
+            key={segment.id}
+            className={`absolute w-2.5 rounded-full ${isTransitioning ? 'transition-all duration-500' : ''}`}
+            style={{
+              background: segment.color,
+              boxShadow: `0 0 10px ${segment.color}40`,
+              top: segment.startY + 'px',
+              height: (segment.endY - segment.startY) + 'px'
+            }}
+          />
+        ))}
+      </div>
+    );
+  };
+
+  // Update the useLayoutEffect to ensure better segment connections, especially after branch points
+  useLayoutEffect(() => {
+    if (!scrollContainerRef.current || displayedMessages.length === 0) return;
+    
+    const container = scrollContainerRef.current;
+    const newSegments = [];
+    
+    // Get container dimensions
+    const containerRect = container.getBoundingClientRect();
+    const containerTop = containerRect.top;
+    const containerScroll = container.scrollTop;
+    
+    // Find project root element
+    const rootElement = container.querySelector('[data-node="project-root"]');
+    let lastY = 0;
+    
+    if (rootElement) {
+      const rootRect = rootElement.getBoundingClientRect();
+      const rootBottom = rootRect.bottom - containerTop + containerScroll;
+      
+      // Find the root/main branch for consistent coloring
+      const rootNode = allMessages.find(m => m.type === 'root');
+      const mainBranchId = rootNode?.branch_id || '';
+      const mainBranchColor = getBranchColor(mainBranchId);
+      
+      // Add initial segment from top to root with consistent color based on main branch
+      newSegments.push({
+        id: 'initial-track',
+        startY: 0,
+        endY: rootBottom,
+        color: mainBranchColor, // Always use the main branch color for the first segment
+        branchId: mainBranchId || 'main'
+      });
+      
+      lastY = rootBottom;
+    }
+    
+    // Process all displayed messages to create segments
+    const messageElements = Array.from(container.querySelectorAll('[data-node]'));
+    
+    // Sort elements by their visual position (top to bottom)
+    messageElements.sort((a, b) => {
+      const rectA = a.getBoundingClientRect();
+      const rectB = b.getBoundingClientRect();
+      return (rectA.top - containerTop + containerScroll) - (rectB.top - containerTop + containerScroll);
+    });
+    
+    for (let i = 0; i < messageElements.length; i++) {
+      const element = messageElements[i];
+      const nodeType = element.getAttribute('data-node');
+      if (!nodeType || nodeType === 'project-root') continue;
+      
+      const rect = element.getBoundingClientRect();
+      const messageId = element.getAttribute('data-id');
+      
+      if (!messageId) continue;
+      
+      const message = displayedMessages.find(m => m.id === messageId) || 
+                    (messageId.startsWith('transition-') ? 
+                      displayedMessages.find(m => m.id === messageId.replace('transition-', '')) : 
+                      undefined);
+      
+      if (!message) continue;
+      
+      const elementTop = rect.top - containerTop + containerScroll;
+      const elementBottom = rect.bottom - containerTop + containerScroll;
+      const elementMidpoint = elementTop + (rect.height / 2);
+      
+      // Get color for this segment
+      const color = getBranchColor(message.branch_id);
+      
+      // Create segment from last position to this element
+      if (elementTop > lastY) {
+        newSegments.push({
+          id: `segment-to-${messageId}`,
+          startY: lastY,
+          endY: elementMidpoint,
+          color: color,
+          branchId: message.branch_id
+        });
+      }
+      
+      // Special handling for branch points - ensure we connect to the next element
+      if (nodeType === 'branch-point') {
+        // Look ahead to the next element
+        if (i < messageElements.length - 1) {
+          const nextElement = messageElements[i + 1];
+          const nextRect = nextElement.getBoundingClientRect();
+          const nextTop = nextRect.top - containerTop + containerScroll;
+          
+          // Add an extra segment to connect the branch point to the next element
+          if (nextTop > elementBottom) {
+            const nextMessageId = nextElement.getAttribute('data-id');
+            const nextMessage = nextMessageId ? 
+              displayedMessages.find(m => m.id === nextMessageId) || 
+              (nextMessageId.startsWith('transition-') ? 
+                displayedMessages.find(m => m.id === nextMessageId.replace('transition-', '')) : 
+                undefined) : 
+              undefined;
+            
+            // Use the appropriate branch color for the connecting segment
+            const connectingColor = nextMessage ? getBranchColor(nextMessage.branch_id) : color;
+            
+            newSegments.push({
+              id: `connector-${messageId}-to-next`,
+              startY: elementBottom,
+              endY: nextTop,
+              color: connectingColor,
+              branchId: nextMessage?.branch_id || message.branch_id
+            });
+          }
+        }
+      }
+      
+      // Update last position for next iteration
+      lastY = elementBottom;
+    }
+    
+    // Add final segment to bottom if needed
+    if (lastY < container.scrollHeight) {
+      const lastMessage = displayedMessages[displayedMessages.length - 1];
+      newSegments.push({
+        id: 'final-track',
+        startY: lastY,
+        endY: container.scrollHeight,
+        color: lastMessage ? getBranchColor(lastMessage.branch_id) : '#3b82f6',
+        branchId: lastMessage ? lastMessage.branch_id : 'main'
+      });
+    }
+    
+    setTrackSegments(newSegments);
+  }, [displayedMessages, branchId, loading, showLoadingIndicator, isTransitioning]);
+
   if (loading && allMessages.length === 0) {
     return (
       <div className="flex justify-center py-8">
@@ -255,6 +571,53 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     console.log('Branch button clicked for message:', messageId);
     setSelectedMessageId(messageId);
     setBranchDialogOpen(true);
+  };
+
+  // Find if a message is a branch point with child branches
+  const getBranchPointInfo = (messageId: string): BranchPointInfo | undefined => {
+    return branchPoints.find(bp => bp.messageId === messageId);
+  };
+
+  // Determine if we're viewing a branch that has a parent we can switch back to
+  const getCurrentBranchParent = (): Branch | undefined => {
+    if (!branchId) return undefined;
+    
+    const currentBranch = branches.find(b => b.id === branchId);
+    if (currentBranch?.parent_branch_id) {
+      return branches.find(b => b.id === currentBranch.parent_branch_id);
+    }
+    return undefined;
+  };
+
+  // Enhanced branch switching function
+  const handleSwitchBranch = (targetBranchId: string | undefined) => {
+    console.log('Switching to branch:', targetBranchId);
+    
+    if (onBranchSwitch && targetBranchId) {
+      // Prevent switching to the same branch
+      if (targetBranchId === branchId) {
+        console.log('Already on branch:', targetBranchId);
+        return;
+      }
+      
+      // Before switching, update the UI to show a transitioning state
+      setIsTransitioning(true);
+      setIsSwitchingBranch(true); // Set the specific branch switching state
+      
+      // Call the parent component's onBranchSwitch function
+      onBranchSwitch(targetBranchId);
+      
+      // Schedule a refresh of messages after switching
+      setTimeout(() => {
+        fetchMessages().then(() => {
+          // Reset transition state after a short delay
+          setTimeout(() => {
+            setIsTransitioning(false);
+            setIsSwitchingBranch(false); // Reset branch switching state
+          }, 300);
+        });
+      }, 100);
+    }
   };
 
   const createBranch = async () => {
@@ -291,16 +654,109 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
     }
   };
 
+  const handleMessageSelect = (messageId: string) => {
+    if (onMessageSelect) {
+      onMessageSelect(messageId);
+    }
+  };
+
+  // Add a function to determine which branch to switch to at a branch point
+  const getBranchSwitchTarget = (branchPointInfo: BranchPointInfo, currentBranchId: string | null): { branchId: string, branchName: string | null, branchColor: string } => {
+    // If we're currently on the parent branch, switch to the child branch
+    if (!currentBranchId || currentBranchId === branchPointInfo.parentBranchId) {
+      return {
+        branchId: branchPointInfo.childBranchId,
+        branchName: branchPointInfo.childBranchName,
+        branchColor: branchPointInfo.childBranchColor
+      };
+    }
+    // If we're on the child branch, switch back to the parent branch
+    else if (currentBranchId === branchPointInfo.childBranchId) {
+      return {
+        branchId: branchPointInfo.parentBranchId,
+        branchName: getBranchName(branchPointInfo.parentBranchId),
+        branchColor: branchPointInfo.parentBranchColor
+      };
+    }
+    // Default case
+    return {
+      branchId: branchPointInfo.childBranchId,
+      branchName: branchPointInfo.childBranchName,
+      branchColor: branchPointInfo.childBranchColor
+    };
+  };
+
   return (
    <>
-      <div className="flex flex-col gap-4 max-w-3xl mx-auto p-4 pb-32">
-        {/* Branch line visualization */}
-        <div className="absolute left-[calc(50%-1px)] top-0 bottom-0 w-2 pointer-events-none">
-          <div 
-            className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary opacity-20"
-            style={{ background: `linear-gradient(to bottom, transparent, var(--primary) 10%, var(--primary) 90%, transparent)` }}
-          ></div>
-        </div>
+      <div 
+        ref={scrollContainerRef}
+        className="flex flex-col gap-4 max-w-3xl mx-auto p-4 pb-32 h-[calc(100vh-200px)] overflow-y-auto overflow-x-hidden relative scroll-smooth"
+      >
+        {/* Render unified subway track */}
+        {renderSubwayTrack()}
+        
+        {/* Loading overlay for branch switching */}
+        {isSwitchingBranch && (
+          <div className="absolute inset-0 bg-background/30 backdrop-blur-[1px] z-30 flex items-center justify-center pointer-events-none">
+            <div className="rounded-lg bg-background/80 border shadow-md px-4 py-3 flex items-center gap-2">
+              <GitBranch className="h-4 w-4 text-primary animate-pulse" />
+              <span className="text-sm font-medium">Switching branch...</span>
+            </div>
+          </div>
+        )}
+        
+        {/* Current branch indicator */}
+        {branchId && (
+          <div className="fixed top-4 left-4 z-50">
+            <div 
+              className="px-3 py-1.5 text-xs font-medium rounded-full border shadow-md flex items-center gap-2 bg-white/90 backdrop-blur-sm"
+              style={{ borderColor: `${getBranchColor(branchId)}40` }}
+            >
+              <div 
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: getBranchColor(branchId) }}
+              />
+              <span style={{ color: getBranchColor(branchId) }}>
+                {getBranchName(branchId)}
+              </span>
+            </div>
+          </div>
+        )}
+        
+        {/* Parent branch link - show if we're on a child branch */}
+        {getCurrentBranchParent() && (
+          <div className="fixed top-4 right-4 z-50">
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs px-3 py-1 h-auto flex items-center gap-1.5 border shadow-md bg-white/90 backdrop-blur-sm"
+              onClick={() => handleSwitchBranch(getCurrentBranchParent()!.id)}
+              style={{ 
+                borderColor: `${getBranchColor(getCurrentBranchParent()!.id)}40`,
+                color: getBranchColor(getCurrentBranchParent()!.id)
+              }}
+            >
+              <ArrowLeft className="h-3 w-3" />
+              <span>Back to {getCurrentBranchParent()!.name || 'parent branch'}</span>
+            </Button>
+          </div>
+        )}
+        
+        {/* Project root indicator */}
+        {displayedMessages.length > 0 && (
+          <div className="relative flex justify-center py-8 mb-2" data-node="project-root">
+            <div 
+              className="size-14 rounded-full flex items-center justify-center border-3 shadow-md bg-background z-10 relative"
+              style={{ borderColor: getBranchColor(displayedMessages[0]?.branch_id || '') }}
+            >
+              <Train
+                className="size-7"
+                style={{ color: getBranchColor(displayedMessages[0]?.branch_id || '') }}
+              />
+            </div>
+            
+          </div>
+        )}
         
         {displayedMessages
           .map((message, index) => {
@@ -320,127 +776,232 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
               // Find the branch to get its name
               const currentBranch = branches.find(b => b.id === currentBranchId);
               const branchName = currentBranch?.name || 'Branch continuation';
+              const prevBranchName = getBranchName(prevBranchId);
               
               return (
-                <div key={`transition-${message.id}`} className="relative my-8">
+                <div 
+                  key={`transition-${message.id}`} 
+                  className="relative my-14 z-10"
+                  data-node="branch-transition"
+                  data-id={`transition-${message.id}`}
+                  data-branch={message.branch_id}
+                  data-prev-branch={prevBranchId}
+                >
                   {/* Branch transition visualization */}
-                  <div className="flex items-center gap-2 py-4 relative">
-                    <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${prevBranchColor}, ${currentBranchColor})` }}></div>
+                  <div className="flex items-center justify-center relative">
                     <div 
-                      className="px-4 py-2 text-sm font-medium rounded-full border flex items-center gap-2"
+                      className="size-16 rounded-full border-3 bg-background shadow-lg flex items-center justify-center absolute z-10"
                       style={{ 
-                        backgroundColor: `${currentBranchColor}20`, 
-                        borderColor: currentBranchColor,
-                        color: currentBranchColor
+                        borderColor: currentBranchColor, 
+                        boxShadow: `0 0 0 4px rgba(255,255,255,0.9), 0 0 0 5px ${currentBranchColor}40` 
                       }}
                     >
-                      <GitBranch className="h-4 w-4" /> 
-                      {branchName}
+                      <GitBranch 
+                        className="size-7" 
+                        style={{ color: currentBranchColor }}
+                      />
                     </div>
-                    <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${currentBranchColor}, ${prevBranchColor})` }}></div>
+                    
+                    {/* Simplified branch info tag */}
+                    <div 
+                      className="absolute top-24 left-1/2 transform -translate-x-1/2 px-5 py-2 rounded-lg text-sm font-medium border-2 flex items-center gap-2 shadow-sm mt-2 bg-white"
+                      style={{ 
+                        borderColor: `${currentBranchColor}`,
+                        color: currentBranchColor,
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <GitBranch className="size-4" />
+                        <span>Branch transition</span>
+                      </div>
+                    </div>
                   </div>
-                  
-                  {/* Line connection visualization */}
-                  <div className="absolute left-1/2 -top-12 bottom-0 w-0.5" style={{ background: `linear-gradient(to bottom, ${prevBranchColor}, ${currentBranchColor})` }}></div>
                 </div>
               );
             }
 
+            // Check if this message is a branch point with child branches
+            const branchPointInfo = getBranchPointInfo(message.id);
+            const hasBranchOptions = branchPointInfo && (
+              branchPointInfo.parentBranchId === message.branch_id || 
+              branchPointInfo.childBranchId === message.branch_id
+            );
+            
             if (message.type === 'user-message' || message.type === 'assistant-message') {
               const isUser = message.type === 'user-message';
               const messageText = message.message_text || '';
-              
-              return (
-                <div 
-                  key={message.id} 
-                  className={cn(
-                    "group relative",
-                    isUser ? "ml-12" : "mr-12"
-                  )}
-                  onMouseEnter={() => setActiveMessage(message.id)}
-                  onMouseLeave={() => setActiveMessage(null)}
+              const stationNumber = getStationNumber(message, index, displayedMessages);
+              const branchColor = getBranchColor(message.branch_id);
+                
+                return (
+                  <div 
+                    key={message.id} 
+                    className={cn(
+                  "group relative z-10 my-6",
+                    isUser ? "ml-4 mr-16 md:ml-16 md:mr-24" : "ml-16 mr-4 md:ml-24 md:mr-16",
+                    )}
+                    onMouseEnter={() => setActiveMessage(message.id)}
+                    onMouseLeave={() => setActiveMessage(null)}
+                  onClick={() => handleMessageSelect(message.id)}
+                  data-node="message"
+                  data-id={message.id}
+                  data-branch={message.branch_id}
+                  data-type={message.type}
                 >
-                  {/* Connection to branch line - color based on branch */}
+                  {/* Branch line extending to the side if this is a branch point */}
+                  {hasBranchOptions && !isUser && (
+                    <div className="absolute left-1/2 top-1/2 transform -translate-y-1/2 z-0">
+                      <div className="relative">
+                        {/* Get the correct branch target based on current branch */}
+                        {(() => {
+                          const switchTarget = getBranchSwitchTarget(branchPointInfo, branchId);
+                          return (
+                            <>
+                              {/* Horizontal branch line with transition */}
+                              <div 
+                                className={`absolute h-3 ${isTransitioning ? 'transition-colors duration-500' : ''}`}
+                                style={{ 
+                                  background: switchTarget.branchColor,
+                                  borderTopRightRadius: '4px',
+                                  width: 'calc(50vw - 20px)',
+                                  left: '-10px',
+                                  top: '-1.5px',
+                                  zIndex: 0
+                                }}
+                              />
+                              
+                              {/* Enhanced branch switch button with better positioning and feedback */}
+                              <div className="absolute transform translate-y-8" style={{ left: '40px', zIndex: 1 }}>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-9 text-xs bg-white shadow-md border-2 px-4 flex items-center gap-2 font-medium"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSwitchBranch(switchTarget.branchId);
+                                  }}
+                                  style={{ 
+                                    color: switchTarget.branchColor,
+                                    borderColor: `${switchTarget.branchColor}`, 
+                                  }}
+                                >
+                                  <SwitchCamera className="h-4 w-4" />
+                                  <span>Switch to {switchTarget.branchName || 'branch'}</span>
+                                </Button>
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Message avatar - ensure it's above branch lines */}
                   <div 
                     className={cn(
-                      "absolute top-1/2 w-8 h-0.5 opacity-70",
-                      isUser ? "right-full" : "left-full"
-                    )}
-                    style={{ backgroundColor: getBranchColor(message.branch_id) }}
-                  ></div>
-                  
-                  {/* Avatar */}
-                  <div 
-                    className={cn(
-                      "absolute top-0 size-8 flex items-center justify-center rounded-full border",
+                      "absolute top-8 transform -translate-y-1/2 size-12 flex items-center justify-center rounded-full border-2 shadow-md bg-background z-20",
                       isUser 
-                        ? "right-full mr-4 text-primary-foreground" 
-                        : "left-full ml-4 bg-background border-muted"
+                        ? "left-[-4rem]" 
+                        : "right-[-4rem]"
                     )}
-                    style={isUser ? { backgroundColor: getBranchColor(message.branch_id) } : {}}
+                    style={{ 
+                      borderColor: branchColor, 
+                      background: isUser ? branchColor : 'white',
+                      opacity: activeMessage === message.id || !activeMessage ? 1 : 0.7,
+                      transition: 'all 0.2s ease-in-out'
+                    }}
                   >
-                    {isUser ? <User className="size-4" /> : <Bot className="size-4" />}
-                  </div>
-                  
-                  <Card 
-                    className={cn(
-                      "p-4 shadow-sm transition-all duration-200 max-w-[calc(100%-3rem)]",
-                      isUser 
-                        ? "text-primary-foreground shadow-primary/10" 
-                        : "bg-card border shadow-muted/10",
-                      !isUser && "hover:shadow-md"
+                    {isUser ? (
+                      <User className="size-6 text-white" />
+                    ) : (
+                      <Bot className="size-6" style={{ color: branchColor }} />
                     )}
-                    style={isUser ? { backgroundColor: getBranchColor(message.branch_id) } : {}}
+                    </div>
+                    
+                  {/* Message card */}
+                    <Card 
+                      className={cn(
+                      "transition-all duration-200 p-0 overflow-hidden",
+                        isUser 
+                        ? "text-primary-foreground shadow-sm shadow-primary/10" 
+                        : "border shadow-sm hover:shadow",
+                      activeMessage === message.id && "ring-2 ring-offset-2",
+                      "group-hover:shadow-md"
+                    )}
+                    style={{ 
+                      borderColor: isUser ? branchColor : undefined,
+                      backgroundColor: isUser ? branchColor : undefined,
+                      borderRadius: isUser ? '12px 12px 12px 3px' : '12px 12px 3px 12px',
+                      borderWidth: '1.5px',
+                      ...(activeMessage === message.id ? { 
+                        ringColor: `${branchColor}`,
+                        transform: 'scale(1.01)'
+                      } : {})
+                    }}
                   >
+                    {/* Time indicator */}
                     <div 
                       className={cn(
-                        "prose prose-sm max-w-none",
-                        isUser ? "prose-invert" : "dark:prose-invert"
+                        "px-2 py-0.5 text-[10px] font-medium border-b",
+                        isUser 
+                          ? "bg-black/10 border-black/10 text-white/90" 
+                          : "bg-muted/30 border-muted/30 text-muted-foreground"
                       )}
-                      dangerouslySetInnerHTML={{ __html: formatMessageText(messageText) }}
-                    />
+                    >
+                      {new Date(message.created_at).toLocaleTimeString([], { 
+                        hour: '2-digit', 
+                        minute: '2-digit'
+                      })}
+                      {!isUser && (
+                        <span className="ml-1">• Station {stationNumber}</span>
+                      )}
+                    </div>
                     
+                    <div className="p-3.5">
+                      <div 
+                        className={cn(
+                          "prose prose-sm max-w-none",
+                          isUser ? "prose-invert" : "dark:prose-invert"
+                        )}
+                        dangerouslySetInnerHTML={{ __html: formatMessageText(messageText) }}
+                      />
+                    </div>
+                      
                     {/* AI message footer */}
-                    {!isUser && (
-                      <div className="mt-3 pt-3 border-t border-muted/20 flex justify-between items-center text-xs text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                          <Sparkles className="h-3 w-3" />
-                          <span>AI Assistant</span>
-                        </div>
-                        <span>{new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      {!isUser && (
+                      <div className="px-3.5 py-2 bg-muted/10 border-t border-muted/20 flex justify-between items-center text-xs text-muted-foreground">
+                          <div className="flex items-center gap-1">
+                            <Sparkles className="h-3 w-3" />
+                            <span>AI Assistant</span>
+                          </div>
+                      
+                        {/* Branch button */}
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                      <Button
+                                variant="ghost" 
+                        size="sm"
+                                className="h-6 px-2 text-xs hover:bg-background rounded-full border border-transparent hover:border-muted" 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleBranchClick(message.id);
+                                }}
+                              >
+                                <GitBranch className="h-3 w-3 mr-1" /> 
+                                Branch
+                      </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              Create a new conversation branch from this point
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       </div>
                     )}
                   </Card>
-                  
-                  {/* Branch creation button */}
-                  {activeMessage === message.id && !isUser && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="absolute -left-12 top-1/2 -translate-y-1/2 size-8 p-0 rounded-full shadow-md transition-all duration-200 hover:bg-primary hover:text-primary-foreground"
-                      onClick={() => handleBranchClick(message.id)}
-                    >
-                      <GitBranch className="h-4 w-4" />
-                    </Button>
-                  )}
-                  
-                  <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
-                    {isUser && (
-                      <span>{new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    )}
-                    {!isUser && (
-                      <Button 
-                        variant="ghost" 
-                        className="h-6 px-2 text-xs hover:bg-muted rounded-full" 
-                        onClick={() => handleBranchClick(message.id)}
-                      >
-                        <GitBranch className="h-3 w-3 mr-1" /> 
-                        Branch here
-                      </Button>
-                    )}
                   </div>
-                </div>
-              );
+                );
             }
 
             if (message.type === 'branch-point') {
@@ -448,24 +1009,109 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
               const childBranch = branches.find(b => b.branch_point_node_id === message.id);
               const branchName = childBranch?.name || 'Branch point';
               const branchColor = getBranchColor(message.branch_id);
+              const childBranchColor = childBranch ? getBranchColor(childBranch.id) : branchColor;
+              
+              // Find the parent message (which should be an assistant message)
+              const parentMessage = displayedMessages.find(m => m.id === message.parent_id);
+              const isAssistantParent = parentMessage?.type === 'assistant-message';
+              
+              // Check if this is the last message
+              const isLastMessage = index === displayedMessages.length - 1;
+              
+              // Find the next message to determine the color for the vertical connector
+              const nextMessage = index < displayedMessages.length - 1 ? displayedMessages[index + 1] : null;
+              const nextColor = nextMessage ? getBranchColor(nextMessage.branch_id) : branchColor;
               
               return (
-                <div key={message.id} className="flex items-center gap-2 py-4 relative">
-                  <div className="flex-1 h-px bg-primary/20"></div>
-                  <div 
-                    className="px-4 py-1.5 text-xs font-medium rounded-full border flex items-center gap-1.5"
-                    style={{ 
-                      backgroundColor: `${branchColor}20`, 
-                      borderColor: branchColor,
-                      color: branchColor
-                    }}
-                  >
-                    <GitBranch className="h-3 w-3 inline-block relative -top-px" /> 
-                    {branchName}
+                <div 
+                  key={message.id} 
+                  className="relative py-12 z-10"
+                  data-node="branch-point"
+                  data-id={message.id}
+                  data-branch={message.branch_id}
+                  data-child-branch={childBranch?.id}
+                >
+                  <div className="flex items-center justify-center">
+                    {/* Improved branch point node - clear fork visualization with higher z-index */}
+                    <div 
+                      className="rounded-full border-3 bg-background size-14 flex items-center justify-center shadow-lg relative z-20"
+                      style={{ 
+                        borderColor: branchColor,
+                        boxShadow: `0 0 0 4px white, 0 0 0 5px ${branchColor}30`
+                      }}
+                    >
+                      <GitBranch className="size-6" style={{ color: branchColor }} />
+                    </div>
+                    
+                    {/* Add a vertical line extending down from the branch icon */}
+                    {!isLastMessage && (
+                      <div 
+                        className="absolute w-2.5 rounded-full z-0"
+                        style={{ 
+                          background: nextColor,
+                          top: 'calc(50% + 28px)',  /* Position it right below the branch icon */
+                          height: '100px',
+                          left: '50%',
+                          transform: 'translateX(-50%)',
+                          boxShadow: `0 0 10px ${nextColor}40`
+                        }}
+                      />
+                    )}
+                    
+                    {/* Branch line extending to the right - horizontal fork */}
+                    {childBranch && (
+                      <div className="absolute left-1/2 top-1/2 transform -translate-y-1/2 pointer-events-none" style={{ zIndex: 0 }}>
+                        {/* Line extending completely through the circle */}
+                        <div className="relative">
+                          {(() => {
+                            // Determine if we're on the child branch or parent branch
+                            const isOnChildBranch = branchId === childBranch.id;
+                            const targetBranchId = isOnChildBranch ? message.branch_id : childBranch.id;
+                            const targetBranchName = getBranchName(targetBranchId);
+                            const lineColor = isOnChildBranch ? branchColor : childBranchColor;
+                            
+                            return (
+                              <>
+                                <div 
+                                  className="absolute h-3" 
+                                  style={{ 
+                                    background: lineColor,
+                                    borderTopRightRadius: '4px',
+                                    width: 'calc(50vw - 20px)',
+                                    left: '-10px',
+                                    top: '-1.5px',
+                                    zIndex: 0
+                                  }}
+                                ></div>
+                                
+                                {/* Enhanced switch button with dynamic direction */}
+                                <div className="absolute transform translate-y-8 pointer-events-auto" style={{ left: '40px', zIndex: 1 }}>
+                        <Button 
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-9 text-xs bg-white shadow-md border-2 px-4 flex items-center gap-2 font-medium"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSwitchBranch(targetBranchId);
+                                    }}
+                                    style={{ 
+                                      color: lineColor,
+                                      borderColor: lineColor,
+                                    }}
+                                  >
+                                    <SwitchCamera className="h-4 w-4" />
+                                    <span>Switch to {targetBranchName || 'branch'}</span>
+                        </Button>
+                    </div>
+                              </>
+                            );
+                          })()}
                   </div>
-                  <div className="flex-1 h-px bg-primary/20"></div>
-                </div>
-              );
+                    </div>
+                    )}
+                  </div>
+                  </div>
+                );
             }
 
             return null;
@@ -473,23 +1119,41 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
         
         {/* Loading indicator for new messages */}
         {showLoadingIndicator && (
-          <div className="flex justify-center py-4">
-            <div className="animate-pulse flex gap-1">
-              <div className="bg-primary/30 rounded-full h-2 w-2"></div>
-              <div className="bg-primary/30 rounded-full h-2 w-2 animate-delay-200"></div>
-              <div className="bg-primary/30 rounded-full h-2 w-2 animate-delay-400"></div>
+          <div 
+            className="flex justify-center py-4 z-10"
+            data-node="loading-indicator"
+          >
+            <div className="flex flex-col items-center">
+              <div className="flex gap-1 mb-1">
+                <div className="bg-primary rounded-full h-2 w-2 animate-pulse"></div>
+                <div className="bg-primary rounded-full h-2 w-2 animate-pulse" style={{ animationDelay: '200ms' }}></div>
+                <div className="bg-primary rounded-full h-2 w-2 animate-pulse" style={{ animationDelay: '400ms' }}></div>
+              </div>
+              <span className="text-xs text-muted-foreground animate-pulse">
+                AI is thinking...
+              </span>
             </div>
           </div>
         )}
         
-        <div ref={messagesEndRef} />
+        <div ref={messagesEndRef} className="h-4" />
       </div>
+
+      {/* Scroll to bottom button */}
+      {scrollToBottomVisible && (
+        <Button
+          className="fixed bottom-24 right-4 size-10 p-0 rounded-full shadow-md z-10 bg-primary/90 text-primary-foreground animate-fadeIn"
+          onClick={scrollToBottom}
+        >
+          <CornerDownRight className="size-5" />
+        </Button>
+      )}
 
       {/* Branch creation dialog */}
       <Dialog open={branchDialogOpen} onOpenChange={setBranchDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Create a new branch</DialogTitle>
+            <DialogTitle>Create a new subway branch</DialogTitle>
             <DialogDescription>
               Create a new conversation branch from this point. This allows you to explore a different direction without losing the original conversation.
             </DialogDescription>
@@ -497,20 +1161,27 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="branch-reason">Branch name (optional)</Label>
-              <Input
-                id="branch-reason"
+            <Input
+              id="branch-reason"
                 placeholder="e.g., Alternative approach, What-if scenario"
-                value={branchReason}
-                onChange={(e) => setBranchReason(e.target.value)}
-              />
-            </div>
+              value={branchReason}
+              onChange={(e) => setBranchReason(e.target.value)}
+            />
+              <p className="text-xs text-muted-foreground mt-1">
+                A descriptive name will help you remember the purpose of this branch.
+              </p>
+          </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setBranchDialogOpen(false)}>Cancel</Button>
             <Button 
-              onClick={createBranch} 
+              onClick={createBranch}
               disabled={creatingBranch}
               className="gap-1"
+              style={{ 
+                backgroundColor: branchId ? getBranchColor(branchId) : undefined,
+                borderColor: branchId ? getBranchColor(branchId) : undefined 
+              }}
             >
               {creatingBranch ? (
                 <>Creating<span className="animate-pulse">...</span></>
@@ -524,6 +1195,35 @@ export function MessageList({ projectId, branchId, onBranchCreated }: MessageLis
           </DialogFooter>
         </DialogContent>
       </Dialog>
-   </>
+
+      {/* Add global styles for animations */}
+      <style jsx global>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fadeIn {
+          animation: fadeIn 0.3s ease-out forwards;
+        }
+        
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+        
+        .animate-pulse {
+          animation: pulse 1.5s ease-in-out infinite;
+        }
+        
+        .animate-delay-200 {
+          animation-delay: 0.2s;
+        }
+        
+        .animate-delay-400 {
+          animation-delay: 0.4s;
+        }
+      `}</style>
+    </>
   );
 } 

@@ -80,7 +80,24 @@ export async function POST(req: Request) {
       const branchId = uuidv4();
       const branchName = name || `Branch ${branchDepth}-${branchId.slice(0, 4)}`;
       
-      // Create the new branch
+      // Create a dedicated branch point node after the assistant message
+      const branchPointNodeId = uuidv4();
+      await query(
+        `INSERT INTO timeline_nodes (
+          id, project_id, branch_id, parent_id,
+          type, message_text, message_role, created_by, created_at, position
+        ) 
+        SELECT 
+          $1, project_id, branch_id, id,
+          'branch-point', NULL, 'system', $2, NOW(), position + 0.5
+        FROM timeline_nodes
+        WHERE id = $3`,
+        [
+          branchPointNodeId, created_by, branch_point_node_id
+        ]
+      );
+      
+      // Create the new branch, referencing the new branch point
       const branchResult = await query(
         `INSERT INTO branches (
           id, project_id, parent_branch_id, branch_point_node_id,
@@ -88,7 +105,7 @@ export async function POST(req: Request) {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
         RETURNING *`,
         [
-          branchId, project_id, parent_branch_id, branch_point_node_id,
+          branchId, project_id, parent_branch_id, branchPointNodeId,
           branchName, color, branchDepth, created_by
         ]
       );
@@ -100,20 +117,26 @@ export async function POST(req: Request) {
       await query(
         `INSERT INTO timeline_nodes (
           id, project_id, branch_id, parent_id,
-          type, text, role, created_by, created_at, position
+          type, message_text, message_role, created_by, created_at, position
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9)`,
         [
-          rootNodeId, project_id, branchId, branch_point_node_id,
+          rootNodeId, project_id, branchId, branchPointNodeId,
           'branch-root', 'Branch starting point', 'system', created_by, 0
         ]
       );
 
-      // Mark the original node as a branch point
+      // Normalize positions after insertion
       await query(
         `UPDATE timeline_nodes 
-        SET type = 'branch-point'
-        WHERE id = $1`,
-        [branch_point_node_id]
+        SET position = new_positions.new_pos
+        FROM (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY position) - 1 as new_pos
+          FROM timeline_nodes
+          WHERE branch_id = $1
+          ORDER BY position
+        ) as new_positions
+        WHERE timeline_nodes.id = new_positions.id`,
+        [parent_branch_id]
       );
 
       // Commit transaction

@@ -127,9 +127,22 @@ export default function Home() {
 	};
 
 	const handleBranchSelect = (branchId: string) => {
-		console.log('🔍 DEBUG: Branch selected from minimap:', branchId);
-		setCurrentBranchId(branchId);
-		setIsSidebarOpen(false);
+		console.log('🔍 DEBUG: Branch selected:', branchId);
+		
+		// Check if we're switching to a different branch
+		if (branchId !== currentBranchId) {
+			console.log('🔍 DEBUG: Switching from branch', currentBranchId, 'to branch', branchId);
+			
+			// Update the current branch ID
+			setCurrentBranchId(branchId);
+			
+			// Close the sidebar if it's open
+			if (isSidebarOpen) {
+				setIsSidebarOpen(false);
+			}
+		} else {
+			console.log('🔍 DEBUG: Already on branch', branchId);
+		}
 	};
 
 	// Safety check to ensure we always have a valid string for projectId
@@ -360,6 +373,7 @@ export default function Home() {
 										projectId={safeProjectId} 
 										branchId={currentBranchId}
 										onBranchCreated={(newBranchId: string) => setCurrentBranchId(newBranchId)}
+										onBranchSwitch={handleBranchSelect}
 									/>
 								</div>
 								

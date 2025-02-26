@@ -80,37 +80,13 @@ export async function POST(req: Request) {
 				]
 			);
 			
-			// Create initial welcome message
-			const welcomeNodeId = uuidv4();
-			
-			await query(
-				`INSERT INTO timeline_nodes 
-				 (id, project_id, branch_id, parent_id, type, status,
-				  message_text, message_role, position, created_by, created_at)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-				[
-					welcomeNodeId,
-					projectId,
-					mainBranchId,
-					rootNodeId,
-					'assistant-message',
-					'active',
-					'Welcome to your new project! Start by sending a message.',
-					'assistant',
-					1,
-					'ai',
-					timestamp
-				]
-			);
-			
 			// Commit transaction
 			await query('COMMIT');
 			
 			return NextResponse.json({
 				...projectResult.rows[0],
 				mainBranchId,
-				rootNodeId,
-				welcomeNodeId
+				rootNodeId
 			});
 		} catch (error) {
 			// Rollback on error

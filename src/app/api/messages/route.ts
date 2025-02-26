@@ -55,7 +55,7 @@ export async function POST(req: Request) {
       await query(`
         INSERT INTO timeline_nodes (
           id, project_id, branch_id, parent_id,
-          type, text, role, created_by, created_at, position
+          type, message_text, message_role, created_by, created_at, position
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9)
       `, [
         userMessageId,
@@ -74,18 +74,18 @@ export async function POST(req: Request) {
       const conversationHistory = await query(`
         WITH RECURSIVE conversation_tree AS (
           -- Start with current message
-          SELECT id, parent_id, type, text, role, position
+          SELECT id, parent_id, type, message_text, message_role, position
           FROM timeline_nodes
           WHERE id = $1
           
           UNION ALL
           
           -- Join with parent message
-          SELECT tn.id, tn.parent_id, tn.type, tn.text, tn.role, tn.position
+          SELECT tn.id, tn.parent_id, tn.type, tn.message_text, tn.message_role, tn.position
           FROM timeline_nodes tn
           JOIN conversation_tree ct ON tn.id = ct.parent_id
         )
-        SELECT id, parent_id, type, text, role, position
+        SELECT id, parent_id, type, message_text, message_role, position
         FROM conversation_tree
         WHERE type IN ('user-message', 'assistant-message')
         ORDER BY position DESC
@@ -97,8 +97,8 @@ export async function POST(req: Request) {
         .filter(node => node.type === 'user-message' || node.type === 'assistant-message')
         .map(node => {
           return {
-            role: node.role || (node.type === 'user-message' ? 'user' : 'assistant'),
-            content: node.text || ''
+            role: node.message_role || (node.type === 'user-message' ? 'user' : 'assistant'),
+            content: node.message_text || ''
           };
         })
         .reverse();
@@ -152,7 +152,7 @@ You should provide responses that are standalone and don't explicitly reference 
       await query(`
         INSERT INTO timeline_nodes (
           id, project_id, branch_id, parent_id,
-          type, text, role, created_by, created_at, position
+          type, message_text, message_role, created_by, created_at, position
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9)
       `, [
         aiMessageId,
@@ -174,8 +174,8 @@ You should provide responses that are standalone and don't explicitly reference 
         user_message: { 
           id: userMessageId, 
           type: 'user-message',
-          text: text,
-          role: 'user',
+          message_text: text,
+          message_role: 'user',
           branch_id: branch_id,
           project_id: project_id,
           parent_id: parent_id,
@@ -184,8 +184,8 @@ You should provide responses that are standalone and don't explicitly reference 
         assistant_message: { 
           id: aiMessageId, 
           type: 'assistant-message',
-          text: aiResponse,
-          role: 'assistant',
+          message_text: aiResponse,
+          message_role: 'assistant',
           branch_id: branch_id,
           project_id: project_id,
           parent_id: userMessageId,
