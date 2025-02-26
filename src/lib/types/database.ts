@@ -72,7 +72,7 @@ export interface ExpertSettings {
 // Main Project type
 export interface Project {
 	id: string;
-	name: string;
+	title: string;
 	description: string | null;
 	created_at: string;
 	updated_at: string;
@@ -115,40 +115,28 @@ export type NodeStatus = 'archived' | 'hidden' | 'featured' | null;
 interface BaseNode {
 	id: string;
 	project_id: string;
+	branch_id: string;
 	expert_id: string;
 	parent_id: string | null;
-	node_type: NodeType;
+	type: NodeType;
 	status: NodeStatus;
-	metadata: Record<string, any> | null;
+	content: string;
+	created_by: string;
 	created_at: string;
-	updated_at: string;
+	position: number;
+	metadata: Record<string, any> | null;
 }
 
 export interface MessageNode extends BaseNode {
-	node_type: 'message';
-	content: {
-		text: string;
-		role: 'user' | 'assistant';
-	};
+	type: 'message';
 }
 
 export interface ForkNode extends BaseNode {
-	node_type: 'fork';
-	content: {
-		reason: string;
-		branches: Array<{
-			position: number;
-			description: string;
-		}>;
-	};
+	type: 'fork';
 }
 
 export interface RootNode extends BaseNode {
-	node_type: 'root';
-	content: {
-		title: string;
-		context: Record<string, any>;
-	};
+	type: 'root';
 }
 
 export type TimelineNode = MessageNode | ForkNode | RootNode; 

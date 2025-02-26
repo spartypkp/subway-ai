@@ -17,7 +17,7 @@ export async function createEmptyNode({
         project_id: projectId,
         expert_id: expertId,
         parent_id: parentId,
-        node_type: 'message',
+        type: 'message',
         content: {
           text: '',
           role: 'user'
