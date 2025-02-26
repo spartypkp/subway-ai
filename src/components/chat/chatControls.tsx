@@ -59,11 +59,11 @@ export function ChatControls({ projectId, branchId, mainBranchId, onMessageSubmi
       console.log('🔧 DEBUG: Fetched nodes:', data);
       
       // Find the last message or the root node
-      let lastNode = data.find((node: any) => node.type === 'root');
+      let lastNode = data.find((node: any) => node.type === 'root' || node.type === 'branch-root');
       
       // Sort messages by creation time
       const sortedMessages = data
-        .filter((node: any) => node.type === 'message')
+        .filter((node: any) => node.type === 'user-message' || node.type === 'assistant-message')
         .sort((a: any, b: any) => {
           return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         });
@@ -108,14 +108,6 @@ export function ChatControls({ projectId, branchId, mainBranchId, onMessageSubmi
       const effectiveBranchId = branchId || mainBranchId || '';
       console.log('🔧 DEBUG: Using branch ID:', effectiveBranchId);
       
-      // Prepare the message content in the correct format
-      const messageContent = {
-        role: 'user',
-        text: message
-      };
-      
-      console.log('🔧 DEBUG: Formatted message content:', messageContent);
-      
       // Submit the message
       const response = await fetch('/api/messages', {
         method: 'POST',
@@ -123,10 +115,11 @@ export function ChatControls({ projectId, branchId, mainBranchId, onMessageSubmi
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          projectId,
-          branchId: effectiveBranchId,
-          parentId: lastNode.id,
-          content: messageContent
+          project_id: projectId,
+          branch_id: effectiveBranchId,
+          parent_id: lastNode.id,
+          text: message,
+          created_by: 'user' // You might want to get this from auth context
         }),
       });
       

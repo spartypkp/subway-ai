@@ -7,13 +7,25 @@ import { Minimap } from "@/components/minimap";
 import { ChatControls } from "@/components/chat/chatControls";
 import { MessageList } from "@/components/chat/messageList";
 import { Button } from "@/components/ui/button";
-import { PlusIcon, Menu, Train, GitBranch, Map } from "lucide-react";
+import { 
+	PlusIcon, 
+	Menu, 
+	Train, 
+	GitBranch, 
+	Map,
+	ChevronDown
+} from "lucide-react";
 import { Project } from "@/lib/types/database";
 import { H1 } from "@/components/ui/typography";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardHeader } from "@/components/ui/card";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { TimelineNode } from "@/lib/types/database";
 import { ReactFlowProvider } from "reactflow";
@@ -44,12 +56,18 @@ export default function Home() {
 				const data = await response.json();
 				console.log('🔍 DEBUG: Projects fetched:', data.length, 'projects');
 				
-				setProjects(data);
+				// Map any title property to name for backward compatibility
+				const processedData = data.map((project: any) => ({
+					...project,
+					name: project.name || project.title || 'Unnamed Project'
+				}));
+				
+				setProjects(processedData);
 				
 				// If there are projects, select the first one
-				if (data.length > 0 && !selectedProjectId) {
-					console.log('🔍 DEBUG: Auto-selecting first project:', data[0].id, data[0].name);
-					setSelectedProjectId(data[0].id);
+				if (processedData.length > 0 && !selectedProjectId) {
+					console.log('🔍 DEBUG: Auto-selecting first project:', processedData[0].id, processedData[0].name);
+					setSelectedProjectId(processedData[0].id);
 				}
 			} catch (error) {
 				console.error("🔍 DEBUG: Failed to fetch projects:", error);
@@ -87,14 +105,14 @@ export default function Home() {
 		fetchMainBranch();
 	}, [selectedProjectId]);
 
-	const handleCreateProject = async (title: string, description: string) => {
+	const handleCreateProject = async (name: string, description: string) => {
 		try {
 			const response = await fetch("/api/projects", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ title, description }),
+				body: JSON.stringify({ name, description }),
 			});
 
 			if (!response.ok) throw new Error("Failed to create project");
@@ -114,8 +132,12 @@ export default function Home() {
 		setIsSidebarOpen(false);
 	};
 
+	// Safety check to ensure we always have a valid string for projectId
+	const safeProjectId = selectedProjectId || '';
+
 	return (
 		<main className="flex flex-col h-screen max-h-screen bg-background">
+			{/* Header with controls */}
 			<header className="border-b flex justify-between items-center p-3 shrink-0">
 				<div className="flex items-center gap-3">
 					<Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>
@@ -165,7 +187,7 @@ export default function Home() {
 																	setCurrentBranchId(null);
 																}}
 															>
-																{project.title}
+																{project.name}
 															</Button>
 														))}
 													</div>
@@ -187,9 +209,9 @@ export default function Home() {
 														</div>
 													</div>
 												) : (
-													<ReactFlowProvider key={`flow-mobile-${selectedProjectId}`}>
+													<ReactFlowProvider key={`flow-mobile-${safeProjectId}`}>
 														<Minimap
-															projectId={selectedProjectId}
+															projectId={safeProjectId}
 															currentBranchId={currentBranchId}
 															onSelectBranch={handleBranchSelect}
 														/>
@@ -224,7 +246,7 @@ export default function Home() {
 						<H1 className="text-xl font-bold md:text-2xl flex items-center gap-2">
 							<Train className="h-5 w-5 text-primary hidden sm:inline-block" />
 							{selectedProject ? (
-								selectedProject.title
+								selectedProject.name
 							) : loading ? (
 								<Skeleton className="h-8 w-[200px]" />
 							) : (
@@ -234,7 +256,44 @@ export default function Home() {
 					</div>
 				</div>
 
-				<div className="flex gap-2">
+				<div className="flex gap-2 items-center">
+					{/* Project selector dropdown */}
+					{projects.length > 0 && (
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button variant="outline" size="sm" className="flex items-center gap-1">
+									<Map className="h-4 w-4 mr-1" />
+									{selectedProject ? (
+										<span className="max-w-[150px] truncate">{selectedProject.name}</span>
+									) : (
+										"Select Project"
+									)}
+									<ChevronDown className="h-4 w-4 ml-1" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end">
+								{projects.map(project => (
+									<DropdownMenuItem 
+										key={project.id}
+										onClick={() => {
+											setSelectedProjectId(project.id);
+											setCurrentBranchId(null);
+										}}
+										className={cn(
+											"flex items-center gap-2",
+											project.id === selectedProjectId ? "bg-muted" : ""
+										)}
+									>
+										{project.id === selectedProjectId && (
+											<div className="h-2 w-2 rounded-full bg-primary" />
+										)}
+										<span className="max-w-[200px] truncate">{project.name}</span>
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuContent>
+						</DropdownMenu>
+					)}
+					
 					<Button
 						variant="outline"
 						size="sm"
@@ -247,10 +306,11 @@ export default function Home() {
 			</header>
 			
 			<div className="flex flex-1 overflow-hidden">
-				{/* Desktop Subway Map */}
-				<div className="hidden md:flex w-3/5 border-r flex-col overflow-hidden">
-					{selectedProjectId ? (
-						<div className="h-full w-full">
+				{/* Main Content Area */}
+				{selectedProject ? (
+					<div className="w-full flex flex-col md:flex-row h-full">
+						{/* Subway Map Section */}
+						<div className="h-[250px] md:h-auto md:w-3/5 border-b md:border-b-0 md:border-r">
 							{loading ? (
 								<div className="h-full w-full flex items-center justify-center">
 									<div className="animate-pulse flex flex-col items-center gap-3">
@@ -260,31 +320,18 @@ export default function Home() {
 									</div>
 								</div>
 							) : (
-								<ReactFlowProvider key={`flow-desktop-${selectedProjectId}`}>
+								<ReactFlowProvider key={`flow-${safeProjectId}`}>
 									<Minimap
-										projectId={selectedProjectId}
+										projectId={safeProjectId}
 										currentBranchId={currentBranchId}
 										onSelectBranch={handleBranchSelect}
 									/>
 								</ReactFlowProvider>
 							)}
 						</div>
-					) : (
-						<div className="flex items-center justify-center h-full text-center">
-							<div>
-								<Train className="h-8 w-8 mx-auto mb-3 text-primary opacity-80" />
-								<p className="text-muted-foreground">
-									Select a project to view the subway map
-								</p>
-							</div>
-						</div>
-					)}
-				</div>
-				
-				{/* Main Content Area */}
-				<div className="flex-1 flex w-full md:w-2/5 flex-col overflow-hidden">
-					{selectedProject ? (
-						<div className="flex flex-col h-full">
+						
+						{/* Chat Section */}
+						<div className="flex-1 flex flex-col w-full md:w-2/5 overflow-hidden">
 							{/* Branch Info */}
 							{currentBranchId && (
 								<div className="px-4 pt-3 pb-2 flex items-center justify-between border-b">
@@ -310,7 +357,7 @@ export default function Home() {
 							<div className="flex-1 overflow-hidden flex flex-col">
 								<div className="flex-1 overflow-y-auto pb-2">
 									<MessageList 
-										projectId={selectedProjectId || ''} 
+										projectId={safeProjectId} 
 										branchId={currentBranchId}
 										onBranchCreated={(newBranchId: string) => setCurrentBranchId(newBranchId)}
 									/>
@@ -320,7 +367,7 @@ export default function Home() {
 								<div className="border-t bg-background/95 backdrop-blur-sm">
 									<div className="mx-auto">
 										<ChatControls
-											projectId={selectedProjectId || ''}
+											projectId={safeProjectId}
 											branchId={currentBranchId}
 											mainBranchId={mainBranchId || ''}
 										/>
@@ -328,22 +375,22 @@ export default function Home() {
 								</div>
 							</div>
 						</div>
-					) : (
-						<div className="flex items-center justify-center h-full">
-							<div className="text-center max-w-md mx-auto p-6">
-								<Train className="h-12 w-12 mx-auto mb-4 text-primary" />
-								<h2 className="text-2xl font-bold mb-2">Welcome to Subway AI</h2>
-								<p className="text-muted-foreground mb-6">
-									Create a new project to start visualizing your conversations as subway lines.
-								</p>
-								<Button onClick={() => setIsCreateDialogOpen(true)}>
-									<PlusIcon className="h-4 w-4 mr-2" />
-									Create your first project
-								</Button>
-							</div>
+					</div>
+				) : (
+					<div className="flex items-center justify-center h-full">
+						<div className="text-center max-w-md mx-auto p-6">
+							<Train className="h-12 w-12 mx-auto mb-4 text-primary" />
+							<h2 className="text-2xl font-bold mb-2">Welcome to Subway AI</h2>
+							<p className="text-muted-foreground mb-6">
+								Create a new project to start visualizing your conversations as subway lines.
+							</p>
+							<Button onClick={() => setIsCreateDialogOpen(true)}>
+								<PlusIcon className="h-4 w-4 mr-2" />
+								Create your first project
+							</Button>
 						</div>
-					)}
-				</div>
+					</div>
+				)}
 			</div>
 			
 			<ProjectDialog

@@ -16,7 +16,7 @@ import ReactFlow, {
   useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { TimelineNode } from '@/lib/types/database';
+import { Branch, TimelineNode } from '@/lib/types/database';
 import { GitBranch, MessageSquare, Train } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -30,8 +30,8 @@ interface MinimapProps {
 const nodeTypes = {
   stationNode: StationNode,
   rootNode: RootNode,
-  branchNode: BranchNode,
-  assistantNode: AssistantNode
+  branchPointNode: BranchPointNode,
+  branchRootNode: BranchRootNode
 };
 
 // Generate branch colors
@@ -50,60 +50,313 @@ const getBranchColor = (depth: number): string => {
   return colors[depth % colors.length];
 };
 
-// Custom node for assistant messages
-function AssistantNode({ data }: NodeProps) {
-  const isActive = data.isActive;
+// Custom node for branch points (where branches diverge)
+function BranchPointNode({ data }: NodeProps) {
+  // Determine which way the branch is going (left or right)
+  const isRightBranch = data.childBranchDirection === 'right';
   
   return (
     <div 
       className={cn(
-        "p-1 rounded-full flex items-center justify-center bg-white",
-        isActive ? "scale-105" : ""
+        "p-1 rounded-full shadow-md flex items-center justify-center bg-white transition-all duration-300",
+        data.isActive ? "ring-2 ring-offset-1 shadow-lg" : "hover:shadow-md",
+        data.isOnActivePath ? "scale-110" : ""
       )}
       style={{ 
         borderColor: data.color,
-        border: `1px solid ${data.color}`,
-        width: '16px',
-        height: '16px',
+        border: `2px solid ${data.color}`,
+        width: '32px',
+        height: '32px',
+        background: data.isActive ? '#f8fafc' : 'white',
+        boxShadow: data.isOnActivePath ? `0 0 8px rgba(${hexToRgb(data.childBranchColor || data.color)}, 0.5)` : undefined,
       }}
+      title={`Branch point to: ${data.childBranchName || 'another branch'}`}
     >
-      <div
-        className="rounded-full"
-        style={{ background: data.color, width: '6px', height: '6px' }}
+      <GitBranch size={16} style={{ color: data.color, transform: isRightBranch ? 'scaleX(1)' : 'scaleX(-1)' }} />
+      <Handle 
+        id="target-main"
+        type="target" 
+        position={Position.Top} 
+        style={{ 
+          background: data.color, 
+          width: '8px', 
+          height: '8px',
+          top: '-4px', // Position exactly at the top center
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1
+        }}
       />
-      <Handle type="target" position={Position.Top} style={{ background: data.color, width: '6px', height: '6px' }} />
-      <Handle type="source" position={Position.Bottom} style={{ background: data.color, width: '6px', height: '6px' }} />
+      <Handle 
+        id="source-main"
+        type="source" 
+        position={Position.Bottom} 
+        style={{ 
+          background: data.color, 
+          width: '8px', 
+          height: '8px',
+          bottom: '-4px', // Position exactly at the bottom center
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1
+        }}
+      />
+      
+      {/* Dynamically place the branch handle based on direction */}
+      <Handle 
+        id={isRightBranch ? "right" : "left"}
+        type="source" 
+        position={isRightBranch ? Position.Right : Position.Left} 
+        style={{ 
+          background: data.childBranchColor || data.color, 
+          width: '8px', 
+          height: '8px',
+          borderWidth: '2px',
+          borderColor: 'white',
+          [isRightBranch ? 'right' : 'left']: '-4px', // Position exactly at the edge center
+          top: '50%',
+          transform: 'translateY(-50%)',
+          zIndex: 1
+        }} 
+      />
+      
+      
     </div>
   );
 }
 
-// Custom node for stations (user messages)
+// Custom node for branch roots (starting points of new branches)
+function BranchRootNode({ data }: NodeProps) {
+  return (
+    <div 
+      className={cn(
+        "p-1 rounded-full shadow-md flex items-center justify-center bg-white transition-all duration-300",
+        data.isActive ? "ring-2 ring-offset-1 shadow-lg scale-110" : "hover:shadow-md hover:scale-105",
+      )}
+      style={{ 
+        borderColor: data.color,
+        border: `3px solid ${data.color}`, // Thicker border
+        width: '28px', // Slightly larger
+        height: '28px',
+        background: data.isActive ? '#f8fafc' : 'white', // Subtle background change when active
+        boxShadow: data.isActive ? `0 0 8px rgba(${hexToRgb(data.color)}, 0.5)` : undefined,
+      }}
+      title={`Start of branch: ${data.branchName || 'Branch'}`}
+    >
+      <div className="w-3 h-3 rounded-full" style={{ background: data.color }} />
+      <Handle 
+        id="left"
+        type="target" 
+        position={Position.Left} 
+        style={{ 
+          background: data.color, 
+          width: '8px', 
+          height: '8px',
+          left: '-4px', // Position exactly at the left center
+          top: '50%',
+          transform: 'translateY(-50%)',
+          zIndex: 1
+        }} 
+      />
+      <Handle 
+        id="target-center"
+        type="target" 
+        position={Position.Top} 
+        style={{ 
+          background: data.color, 
+          width: '8px', 
+          height: '8px',
+          top: '-4px', // Position exactly at the top center
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1
+        }} 
+      />
+      <Handle 
+        id="source-center"
+        type="source" 
+        position={Position.Bottom} 
+        style={{ 
+          background: data.color, 
+          width: '8px', 
+          height: '8px',
+          bottom: '-4px', // Position exactly at the bottom center
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1
+        }} 
+      />
+      
+      {data.branchName && (
+        <div className="absolute top-full mt-1 text-[11px] whitespace-nowrap font-semibold" style={{ color: data.color }}>
+          {data.branchName}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Custom node for stations (message pairs)
 function StationNode({ data, selected }: NodeProps) {
   const isActive = data.isActive;
+  const [isHovering, setIsHovering] = useState(false);
+  
+  // Determine node size based on content length
+  const hasUserContent = !!data.userContent;
+  const hasAssistantContent = !!data.assistantContent;
+  const contentLength = (data.userContent?.length || 0) + (data.assistantContent?.length || 0);
+  
+  // Much wider nodes for better visualization
+  const getNodeSize = () => {
+    // Use significantly wider nodes for better visualization
+    return { 
+      width: `${data.calculatedWidth || 140}px`, 
+      height: isHovering ? '90px' : '45px' // Expand height on hover
+    };
+  };
+  
+  const { width, height } = getNodeSize();
+  
+  // Format timestamps if available
+  const formattedTime = data.timestamp ? new Date(data.timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : '';
+  
+  // Get the station number for badge display
+  const stationNumber = data.stationNumber || '';
+  
+  // Prepare tooltip with more extensive content previews
+  const tooltipContent = [
+    data.userContent ? `User: ${data.userContent.substring(0, 150)}${data.userContent.length > 150 ? '...' : ''}` : '',
+    data.assistantContent ? `Assistant: ${data.assistantContent.substring(0, 150)}${data.assistantContent.length > 150 ? '...' : ''}` : ''
+  ].filter(Boolean).join('\n\n');
   
   return (
     <div 
       className={cn(
-        "px-2 py-1 rounded-full border-2 flex items-center justify-center bg-white shadow-md transition-all duration-300",
-        isActive ? "shadow-lg scale-110" : "hover:shadow-lg hover:scale-105",
-        selected ? "ring-2 ring-offset-2" : ""
+        "px-4 py-2 rounded-lg border-2 flex flex-col items-center justify-center bg-white shadow-md transition-all duration-300",
+        isActive ? "shadow-lg scale-110 ring-2 ring-offset-1" : "hover:shadow-lg hover:scale-105",
+        selected ? "ring-2 ring-offset-2 ring-primary" : "",
+        !hasUserContent && !hasAssistantContent ? "opacity-70" : "",
+        "cursor-pointer select-none"
       )}
       style={{ 
         borderColor: data.color,
-        minWidth: '30px',
-        minHeight: '30px',
+        width,
+        height,
+        boxShadow: isActive ? `0 0 8px rgba(${hexToRgb(data.color)}, 0.5)` : undefined,
+        transition: 'all 0.2s ease-in-out, height 0.15s ease-in-out',
+        overflow: 'hidden'
+      }}
+      title={tooltipContent}
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
+      onClick={() => {
+        // Add subtle feedback on click
+        const el = document.activeElement as HTMLElement;
+        if (el) el.blur();
       }}
     >
-      <div 
-        className="text-xs font-medium truncate max-w-[120px]"
-        style={{ color: data.color }}
-      >
-        {data.content && data.content.length > 15 
-          ? data.content.substring(0, 15) + '...' 
-          : data.content || "Message"}
+      {/* Normal view */}
+      <div className="flex items-center justify-between w-full">
+        {/* Left: Station icon with number badge */}
+        <div className="flex items-center flex-shrink-0 mr-2 relative">
+          <div 
+            className="w-3 h-3 rounded-full" 
+            style={{ backgroundColor: data.color }}
+          />
+          {stationNumber && (
+            <div className="absolute -top-2 -left-2 text-[9px] font-bold" style={{ color: data.color }}>
+              {stationNumber}
+            </div>
+          )}
+        </div>
+        
+        {/* Center: Content preview */}
+        <div className="flex-grow overflow-hidden text-center">
+          {hasUserContent && (
+            <div 
+              className={cn(
+                "text-xs font-medium truncate text-center",
+                isActive ? "font-semibold" : ""
+              )}
+              style={{ color: data.color }}
+            >
+              {data.userContent.length > 30 
+                ? data.userContent.substring(0, 30) + '...' 
+                : data.userContent}
+            </div>
+          )}
+        </div>
+        
+        {/* Right: Station time */}
+        {formattedTime && (
+          <div className="text-[10px] text-muted-foreground ml-2 flex-shrink-0">
+            {formattedTime}
+          </div>
+        )}
       </div>
-      <Handle type="target" position={Position.Top} style={{ background: data.color, width: '8px', height: '8px' }} />
-      <Handle type="source" position={Position.Bottom} style={{ background: data.color, width: '8px', height: '8px' }} />
+      
+      {/* Expanded hover content */}
+      {isHovering && (
+        <div className="w-full mt-2 overflow-hidden animate-fadeIn" style={{ animationDuration: '0.15s' }}>
+          <div className="h-px w-full bg-muted mb-2"></div>
+          
+          {hasUserContent && (
+            <div className="text-xs text-left mb-1 text-ellipsis overflow-hidden">
+              <span className="font-semibold inline-block">User:</span>{' '}
+              <span className="inline-block">{data.userContent.substring(0, 70)}
+              {data.userContent.length > 70 ? '...' : ''}</span>
+            </div>
+          )}
+          
+          {hasAssistantContent && (
+            <div className="text-xs text-left text-muted-foreground text-ellipsis overflow-hidden">
+              <span className="font-semibold inline-block">AI:</span>{' '}
+              <span className="inline-block">{data.assistantContent.substring(0, 70)}
+              {data.assistantContent.length > 70 ? '...' : ''}</span>
+            </div>
+          )}
+          
+          {/* Hover action hint */}
+          <div className="text-[9px] text-center mt-1 text-muted-foreground">
+            Click to navigate to this conversation
+          </div>
+        </div>
+      )}
+      
+      {/* Station connectors */}
+      <Handle 
+        id="target-top" 
+        type="target" 
+        position={Position.Top} 
+        style={{ 
+          background: data.color, 
+          width: '8px', 
+          height: '8px',
+          top: '-4px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1,
+          border: '2px solid white'
+        }}
+      />
+      <Handle 
+        id="source-bottom" 
+        type="source" 
+        position={Position.Bottom} 
+        style={{ 
+          background: data.color, 
+          width: '8px', 
+          height: '8px',
+          bottom: '-4px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1,
+          border: '2px solid white'
+        }}
+      />
     </div>
   );
 }
@@ -112,94 +365,61 @@ function StationNode({ data, selected }: NodeProps) {
 function RootNode({ data }: NodeProps) {
   return (
     <div 
-      className="p-2 rounded-full border-2 bg-white shadow-md flex items-center justify-center"
+      className={cn(
+        "p-2 rounded-full border-2 bg-white shadow-md flex items-center justify-center",
+        data.isActive ? "ring-2 ring-offset-1 shadow-lg" : ""
+      )}
       style={{ 
         borderColor: data.color,
-        width: '40px',
-        height: '40px',
+        border: `3px solid ${data.color}`, // Thicker border
+        width: '46px', // Slightly larger
+        height: '46px',
+        background: data.isActive ? '#f8fafc' : 'white',
       }}
+      title={`Project: ${data.projectName || 'Main Project'}`}
     >
-      <Train className="text-primary" size={20} />
-      <Handle type="source" position={Position.Bottom} style={{ background: data.color, width: '8px', height: '8px' }} />
+      <Train className="text-primary" size={22} />
+      <Handle 
+        id="source-bottom" 
+        type="source" 
+        position={Position.Bottom} 
+        style={{ 
+          background: data.color, 
+          width: '8px', 
+          height: '8px',
+          bottom: '-4px', // Position exactly at the bottom center
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1
+        }} 
+      />
+      
+      {data.projectName && (
+        <div className="absolute top-full mt-1 text-xs whitespace-nowrap font-bold">
+          {data.projectName}
+        </div>
+      )}
     </div>
   );
 }
 
-// Custom node for branch points
-function BranchNode({ data }: NodeProps) {
-  return (
-    <div 
-      className="p-1 rounded-full shadow-md flex items-center justify-center bg-white animate-pulse"
-      style={{ 
-        borderColor: data.color,
-        border: `2px solid ${data.color}`,
-        width: '30px',
-        height: '30px',
-      }}
-    >
-      <GitBranch size={16} style={{ color: data.color }} />
-      <Handle type="target" position={Position.Top} style={{ background: data.color, width: '8px', height: '8px' }} />
-      <Handle type="source" position={Position.Bottom} style={{ background: data.color, width: '8px', height: '8px' }} />
-      <Handle type="source" position={Position.Right} style={{ background: data.color, width: '8px', height: '8px' }} />
-    </div>
-  );
+// Helper function to convert hex color to RGB values for use in rgba()
+function hexToRgb(hex: string): string {
+  // Remove # if present
+  hex = hex.replace('#', '');
+  
+  // Convert 3-digit hex to 6-digits
+  if (hex.length === 3) {
+    hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+  }
+  
+  // Parse the hex values
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  
+  return `${r}, ${g}, ${b}`;
 }
-
-// Extract content from message nodes
-const extractMessageContent = (node: TimelineNode): string => {
-  try {
-    if (!node.content) return '';
-    
-    // Handle object content
-    if (typeof node.content === 'object') {
-      const content = node.content as any;
-      return content.text || content.content || '';
-    }
-    
-    // Handle string content
-    if (typeof node.content === 'string') {
-      try {
-        const parsed = JSON.parse(node.content);
-        return parsed.text || parsed.content || '';
-      } catch {
-        return node.content;
-      }
-    }
-    
-    return '';
-  } catch (error) {
-    console.error('Error extracting message content:', error);
-    return '';
-  }
-};
-
-// Extract role from message nodes
-const extractMessageRole = (node: TimelineNode): 'user' | 'assistant' => {
-  try {
-    if (!node.content) return 'assistant';
-    
-    // Handle object content
-    if (typeof node.content === 'object') {
-      const content = node.content as any;
-      return content.role || 'assistant';
-    }
-    
-    // Handle string content
-    if (typeof node.content === 'string') {
-      try {
-        const parsed = JSON.parse(node.content);
-        return parsed.role || 'assistant';
-      } catch {
-        return 'assistant';
-      }
-    }
-    
-    return 'assistant';
-  } catch (error) {
-    console.error('Error extracting message role:', error);
-    return 'assistant';
-  }
-};
 
 export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -208,310 +428,472 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
   const [error, setError] = useState<string | null>(null);
   const reactFlowInstance = useReactFlow();
   
+  // State to track if we're showing the branch labels
+  const [showBranchLabels, setShowBranchLabels] = useState(false);
+  
   // Transform timeline nodes to React Flow format
-  const transformDataToReactFlow = useCallback((data: TimelineNode[]) => {
+  const transformDataToReactFlow = useCallback((data: TimelineNode[], branches: Branch[]) => {
     if (!data.length) return { nodes: [], edges: [] };
     
     const flowNodes: Node[] = [];
     const flowEdges: Edge[] = [];
-    const branchMap = new Map<string, { depth: number, color: string, nodes: TimelineNode[] }>();
     
-    // First pass: create branches and organize nodes by branch
-    data.forEach(node => {
-      const branchId = node.branch_id;
-      
-      if (!branchMap.has(branchId)) {
-        branchMap.set(branchId, {
-          depth: 0,
-          color: '#3b82f6', // Default blue
-          nodes: []
-        });
+    // Calculate branch positions
+    const branchMap = new Map<string, { 
+      depth: number, 
+      color: string, 
+      nodes: TimelineNode[],
+      branch: Branch,
+      xPosition: number
+    }>();
+    
+    // Find the main branch (depth 0)
+    const mainBranch = branches.find(b => b.depth === 0);
+    if (!mainBranch) {
+      console.warn('No main branch found');
+      return { nodes: [], edges: [] };
+    }
+    
+    console.log(`Main branch: ${mainBranch.id}, ${mainBranch.name || 'Unnamed'}`);
+    
+    // Sort branches by depth
+    const sortedBranches = [...branches].sort((a, b) => a.depth - b.depth);
+    
+    // Assign x-positions to branches - using a strict grid layout
+    const centerX = 400; // Center position
+    
+    // Responsive branch spacing based on viewport width
+    const getResponsiveBranchSpacing = () => {
+      const width = typeof window !== 'undefined' ? window.innerWidth : 1200;
+      if (width < 640) return 180; // Small screens
+      if (width < 1024) return 220; // Medium screens
+      return 250; // Large screens
+    };
+    
+    const branchSpacing = getResponsiveBranchSpacing();
+    
+    // Assign positions - main branch in center, odd depths to the right, even depths to the left
+    sortedBranches.forEach(branch => {
+      let xPosition;
+      if (branch.depth === 0) {
+        xPosition = centerX; // Main branch in center
+      } else if (branch.depth % 2 === 1) {
+        xPosition = centerX + (Math.ceil(branch.depth / 2) * branchSpacing);
+      } else {
+        xPosition = centerX - (branch.depth / 2 * branchSpacing);
       }
       
-      const branch = branchMap.get(branchId);
-      if (branch) {
-        branch.nodes.push(node);
+      branchMap.set(branch.id, {
+        depth: branch.depth,
+        color: branch.color || getBranchColor(branch.depth),
+        nodes: [],
+        branch,
+        xPosition
+      });
+    });
+    
+    // Group nodes by branch
+    data.forEach(node => {
+      const branchData = branchMap.get(node.branch_id);
+      if (branchData) {
+        branchData.nodes.push(node);
+      } else {
+        console.warn(`No branch found for node ${node.id} (branch_id: ${node.branch_id})`);
       }
     });
     
-    console.log(`Found ${branchMap.size} branches in the data`);
+    // Track active branches (highlighting the current path)
+    const activeBranches = new Set<string>();
+    if (currentBranchId) {
+      // Add the current branch
+      activeBranches.add(currentBranchId);
+      
+      // Find parent branches
+      let currentBranch = branches.find(b => b.id === currentBranchId);
+      while (currentBranch && currentBranch.parent_branch_id) {
+        activeBranches.add(currentBranch.parent_branch_id);
+        currentBranch = branches.find(b => b.id === currentBranch?.parent_branch_id);
+      }
+    } else {
+      // If no current branch, highlight main branch
+      activeBranches.add(mainBranch.id);
+    }
     
-    // Second pass: assign depths and colors to branches
+    // Find the root node
     const rootNode = data.find(n => n.type === 'root');
     if (!rootNode) {
       console.warn('No root node found in data');
       return { nodes: [], edges: [] };
     }
     
-    const mainBranchId = rootNode.branch_id;
-    const mainBranch = branchMap.get(mainBranchId);
+    // Get the project name (if available)
+    const projectName = mainBranch.name || 'Main Line';
     
-    if (!mainBranch) {
-      console.warn('Main branch not found');
+    // Add root node
+    const mainBranchData = branchMap.get(mainBranch.id);
+    if (!mainBranchData) {
+      console.warn('Main branch data not found');
       return { nodes: [], edges: [] };
     }
     
-    // Find all fork nodes to establish branch relationships
-    const forkNodes = data.filter(n => n.type === 'fork');
-    console.log(`Found ${forkNodes.length} fork nodes`);
-    
-    // Set up the main branch
-    mainBranch.depth = 0;
-    mainBranch.color = getBranchColor(0);
-    
-    // Track branch parent relationships
-    const branchParents: Record<string, {parentBranchId: string, forkNodeId: string}> = {};
-    
-    // Establish branch hierarchy
-    forkNodes.forEach(fork => {
-      if (!fork.parent_id) return;
-      
-      const parentNode = data.find(n => n.id === fork.parent_id);
-      if (!parentNode) return;
-      
-      const parentBranchId = parentNode.branch_id;
-      const childBranchId = fork.branch_id;
-      
-      if (parentBranchId === childBranchId) return; // Skip self-references
-      
-      // Store the branch relationship
-      branchParents[childBranchId] = {
-        parentBranchId: parentBranchId,
-        forkNodeId: fork.id
-      };
+    // Add root node at the top of the main branch - ENSURE perfect X alignment with stations
+    // Root node is 46px wide, so adjust x position to center it on the branch line
+    flowNodes.push({
+      id: rootNode.id,
+      type: 'rootNode',
+      position: { 
+        x: mainBranchData.xPosition - 23, // Center the 46px wide root node
+        y: 50 
+      },
+      data: {
+        color: mainBranchData.color,
+        branchId: mainBranch.id,
+        isActive: activeBranches.has(mainBranch.id),
+        projectName
+      }
     });
     
-    // Assign depths to branches using BFS
-    const visited = new Set<string>([mainBranchId]);
-    const queue = [mainBranchId];
+    // Process branch connections first (to establish the subway layout)
+    const branchConnections: {
+      branchPointId: string,
+      branchRootId: string,
+      parentBranchId: string,
+      childBranchId: string,
+      position: number,
+      branchPointNode: TimelineNode // Store the branch point node reference
+    }[] = [];
     
-    while (queue.length > 0) {
-      const currentBranchId = queue.shift()!;
-      const currentBranch = branchMap.get(currentBranchId);
-      
-      if (!currentBranch) continue;
-      
-      // Find all direct child branches
-      Object.entries(branchParents).forEach(([childBranchId, {parentBranchId}]) => {
-        if (parentBranchId === currentBranchId && !visited.has(childBranchId)) {
-          const childBranch = branchMap.get(childBranchId);
-          if (childBranch) {
-            childBranch.depth = currentBranch.depth + 1;
-            childBranch.color = getBranchColor(childBranch.depth);
-            visited.add(childBranchId);
-            queue.push(childBranchId);
-            console.log(`Branch ${childBranchId} is at depth ${childBranch.depth} with color ${childBranch.color}`);
-          }
-        }
-      });
-    }
-    
-    // Track active branches (highlighting the current path)
-    const activeBranches = new Set<string>();
-    if (currentBranchId) {
-      let branch = currentBranchId;
-      while (branch) {
-        activeBranches.add(branch);
-        const parent = branchParents[branch];
-        branch = parent ? parent.parentBranchId : '';
+    // Find all branch connections
+    branches.forEach(branch => {
+      if (branch.parent_branch_id && branch.branch_point_node_id) {
+        // Find the branch point node
+        const branchPointNode = data.find(n => n.id === branch.branch_point_node_id);
+        if (!branchPointNode) return;
+        
+        // Find the branch root node in this branch
+        const branchRootNode = data.find(n => 
+          n.type === 'branch-root' && n.branch_id === branch.id
+        );
+        if (!branchRootNode) return;
+        
+        branchConnections.push({
+          branchPointId: branch.branch_point_node_id,
+          branchRootId: branchRootNode.id,
+          parentBranchId: branch.parent_branch_id,
+          childBranchId: branch.id,
+          position: branchPointNode.position,
+          branchPointNode // Store reference to the branch point node
+        });
       }
-    } else {
-      // If no current branch, highlight main branch
-      activeBranches.add(mainBranchId);
-    }
+    });
     
-    // Position calculation utility
-    const calculateNodePositions = () => {
-      // Track node positions for each branch
-      const positions: Record<string, {
-        x: number, 
-        y: number, 
-        nodeCount: number,
-        messageCount: number,
-        lastNodeId: string
-      }> = {};
-      
-      // Start with root node
-      flowNodes.push({
-        id: rootNode.id,
-        type: 'rootNode',
-        position: { x: 250, y: 50 },
-        data: {
-          label: 'Start',
-          color: mainBranch.color,
-          branchId: mainBranchId,
-          isActive: activeBranches.has(mainBranchId)
-        }
-      });
-      
-      // Set initial position for main branch
-      positions[mainBranchId] = {
-        x: 250,
-        y: 120,
-        nodeCount: 0,
-        messageCount: 0,
-        lastNodeId: rootNode.id
-      };
-      
-      // Process branches by depth to ensure proper layout
-      const sortedBranchIds = Array.from(branchMap.keys()).sort((a, b) => {
-        return (branchMap.get(a)?.depth || 0) - (branchMap.get(b)?.depth || 0);
-      });
-      
-      // Process each branch
-      sortedBranchIds.forEach(branchId => {
-        const branch = branchMap.get(branchId)!;
-        const parent = branchParents[branchId];
-        
-        // Skip the main branch (already processed)
-        if (branchId === mainBranchId) return;
-        
-        // Skip if we don't have parent information
-        if (!parent) {
-          console.warn(`Branch ${branchId} has no parent, skipping`);
-          return;
-        }
-        
-        const parentBranchId = parent.parentBranchId;
-        const parentBranch = branchMap.get(parentBranchId)!;
-        const parentPos = positions[parentBranchId];
-        
-        if (!parentPos) {
-          console.warn(`Parent branch ${parentBranchId} has no position information`);
-          return;
-        }
-        
-        // Find parent message node
-        const parentNode = data.find(n => n.id === parent.forkNodeId)!;
-        const parentMsgNode = data.find(n => n.id === parentNode.parent_id)!;
-        
-        if (!parentMsgNode) {
-          console.warn(`Parent message for fork ${parent.forkNodeId} not found`);
-          return;
-        }
-        
-        // Find the fork point position
-        let forkPosition = { x: 0, y: 0 };
-        
-        // Try to find the already placed parent message node
-        const parentNodeObj = flowNodes.find(n => n.id === parentMsgNode.id);
-        if (parentNodeObj) {
-          forkPosition = { 
-            x: parentNodeObj.position.x, 
-            y: parentNodeObj.position.y + 40 
-          };
-        } else {
-          // If not found (shouldn't happen), use approximate position
-          forkPosition = { 
-            x: parentPos.x, 
-            y: parentPos.y + parentPos.messageCount * 80 
-          };
-        }
-        
-        // Create branch point node
-        const branchPointId = `branch-${parent.forkNodeId}`;
-        flowNodes.push({
-          id: branchPointId,
-          type: 'branchNode',
-          position: forkPosition,
-          data: {
-            color: branch.color,
-            branchId: branchId,
-            isActive: activeBranches.has(branchId),
-            label: `Branch ${branch.depth}`
-          }
-        });
-        
-        // Add edge from parent message to branch point
-        flowEdges.push({
-          id: `edge-to-branch-${parent.forkNodeId}`,
-          source: parentMsgNode.id,
-          target: branchPointId,
-          animated: activeBranches.has(parentBranchId),
-          style: { stroke: parentBranch.color, strokeWidth: 3 }
-        });
-        
-        // Set position for this branch (offset to the right)
-        const xOffset = 300 + (branch.depth * 50);
-        positions[branchId] = {
-          x: forkPosition.x + xOffset,
-          y: forkPosition.y,
-          nodeCount: 0,
-          messageCount: 0,
-          lastNodeId: branchPointId
-        };
-      });
-      
-      return positions;
-    };
-    
-    // Calculate initial positions
-    const positions = calculateNodePositions();
-    
-    // Process each branch to create nodes and edges
-    Object.entries(positions).forEach(([branchId, position]) => {
-      const branch = branchMap.get(branchId)!;
-      const branchColor = branch.color;
+    // Process each branch to create subway lines with stations
+    branchMap.forEach((branchData, branchId) => {
+      const { xPosition, color, nodes: branchNodes, branch } = branchData;
       const isActive = activeBranches.has(branchId);
+      const isMainBranch = branchId === mainBranch.id;
       
-      // Sort nodes by creation time
-      const branchNodes = branch.nodes
-        .filter(n => n.type !== 'root' && n.type !== 'fork') // Only process message nodes
-        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      // This is the true center position of this branch line
+      const branchCenterX = xPosition;
       
-      // Skip empty branches
-      if (branchNodes.length === 0) return;
+      // Get branch name
+      const branchName = branch.name || `Branch ${branch.depth}`;
       
-      // Track the last node added for this branch
-      let lastNodeId = position.lastNodeId;
-      let currentY = position.y;
+      // Sort all nodes by position
+      const sortedNodes = [...branchNodes].sort((a, b) => a.position - b.position);
       
-      // Process messages in this branch
-      branchNodes.forEach((node) => {
-        if (node.type !== 'message') return;
+      // Find specific node types
+      const branchRoot = sortedNodes.find(n => n.type === 'branch-root');
+      
+      // Filter for just message nodes and branch points
+      const messageNodes = sortedNodes.filter(n => 
+        n.type === 'user-message' || n.type === 'assistant-message' || n.type === 'branch-point'
+      );
+      
+      // Create "stations" from the messages
+      // A station can be:
+      // 1. A user message with its corresponding assistant response
+      // 2. A branch point (which appears on the parent branch)
+      // 3. A solo user message (if no response)
+      // 4. A solo assistant message (rare edge case)
+      
+      const stations: {
+        position: number,
+        yPosition: number,
+        id: string,
+        userMessage?: TimelineNode,
+        assistantMessage?: TimelineNode,
+        branchPoint?: TimelineNode
+      }[] = [];
+      
+      // Track processed nodes to avoid duplicates
+      const processedNodes = new Set<string>();
+      
+      // Process message pairs and branch points
+      messageNodes.forEach(node => {
+        // Skip if already processed
+        if (processedNodes.has(node.id)) return;
         
-        const role = extractMessageRole(node);
-        const content = extractMessageContent(node);
+        // Mark this node as processed
+        processedNodes.add(node.id);
         
-        // Calculate position - user messages get more space
-        const isUser = role === 'user';
-        currentY += isUser ? 100 : 60;
-        position.nodeCount++;
-        
-        if (isUser) {
-          position.messageCount++;
+        if (node.type === 'branch-point') {
+          // Add branch point as its own station
+          stations.push({
+            position: node.position,
+            yPosition: 150 + (node.position * 100),
+            id: node.id,
+            branchPoint: node
+          });
+        } else if (node.type === 'user-message') {
+          // Find corresponding assistant message (if any)
+          const assistantMessage = messageNodes.find(n => 
+            n.type === 'assistant-message' && n.parent_id === node.id
+          );
+          
+          // If found, mark it as processed
+          if (assistantMessage) {
+            processedNodes.add(assistantMessage.id);
+          }
+          
+          stations.push({
+            position: node.position,
+            yPosition: 150 + (node.position * 100),
+            id: node.id,
+            userMessage: node,
+            assistantMessage
+          });
+        } else if (node.type === 'assistant-message' && !processedNodes.has(node.id)) {
+          // Handle solo assistant messages
+          stations.push({
+            position: node.position,
+            yPosition: 150 + (node.position * 100),
+            id: node.id,
+            assistantMessage: node
+          });
         }
+      });
+      
+      // Sort stations by position
+      stations.sort((a, b) => a.position - b.position);
+
+      // Add branch root node if this is a child branch
+      let branchRootYPosition = 150; // Default Y position
+      if (branchRoot) {
+        // Find the matching branch connection
+        const connection = branchConnections.find(c => c.branchRootId === branchRoot.id);
         
-        // Create the node
-        flowNodes.push({
-          id: node.id,
-          type: isUser ? 'stationNode' : 'assistantNode',
-          position: { x: position.x, y: currentY },
-          data: {
-            content,
-            color: branchColor,
-            branchId,
-            isActive,
-            isAssistant: !isUser,
-            role
-          }
+        if (connection) {
+          // Calculate branch root Y position (same as the branch point)
+          branchRootYPosition = 150 + (connection.position * 100);
+          
+          // Add the branch root node - BranchRootNode is 28px wide
+          flowNodes.push({
+            id: branchRoot.id,
+            type: 'branchRootNode',
+            position: { 
+              x: xPosition - 14, // Center the 28px wide branch root
+              y: branchRootYPosition 
+            },
+            data: {
+              color,
+              branchId,
+              isActive,
+              branchName
+            }
+          });
+        }
+      }
+      
+      // Add station nodes and connect them with straight lines
+      let previousNodeId: string | undefined = undefined;
+      let previousNodeType: string | undefined = undefined;
+      
+      // If this is the main branch, start from the root
+      if (branchId === mainBranch.id) {
+        previousNodeId = rootNode.id;
+        previousNodeType = 'rootNode';
+      } 
+      // If this is a child branch, start from the branch root
+      else if (branchRoot) {
+        previousNodeId = branchRoot.id;
+        previousNodeType = 'branchRootNode';
+      }
+
+      // For child branches, adjust station Y positions to start below the branch root
+      // This ensures child branch stations are properly positioned in relation to the branch root
+      if (branchId !== mainBranch.id && branchRoot) {
+        // Recalculate Y positions for stations in child branches
+        stations.forEach((station, index) => {
+          // Start positioning stations below the branch root with proper spacing
+          // Add a little extra spacing for the first station to create separation from the branch root
+          const spacing = index === 0 ? 120 : 100;
+          station.yPosition = branchRootYPosition + ((index + 1) * spacing);
         });
-        
-        // Connect to previous node
-        flowEdges.push({
-          id: `edge-${lastNodeId}-${node.id}`,
-          source: lastNodeId,
-          target: node.id,
-          animated: isActive,
-          style: { 
-            stroke: branchColor, 
-            strokeWidth: isUser ? 3 : 2,
-            strokeDasharray: isUser ? undefined : '5,5'
+      }
+      
+      // Process stations in order
+      stations.forEach((station, index) => {
+        if (station.branchPoint) {
+          // This is a branch point - add it specifically as a branch point node
+          
+          // Find the child branch that stems from this branch point
+          const childBranchConnection = branchConnections.find(conn => 
+            conn.branchPointId === station.branchPoint?.id
+          );
+          
+          if (childBranchConnection) {
+            // Get child branch data for styling
+            const childBranchData = branchMap.get(childBranchConnection.childBranchId);
+            if (!childBranchData) return;
+            
+            // Determine branch direction (left or right)
+            const parentXPosition = xPosition;
+            const childXPosition = childBranchData.xPosition;
+            const branchDirection = childXPosition > parentXPosition ? 'right' : 'left';
+            
+            // Add branch point node - ENSURE perfect X alignment with parent branch
+            flowNodes.push({
+              id: station.branchPoint.id,
+              type: 'branchPointNode',
+              position: { 
+                x: xPosition - 16, // Center the 32px wide branch point
+                y: station.yPosition 
+              },
+              data: {
+                color: color, // Use THIS branch's color for the branch point
+                childBranchColor: childBranchData.color, // Use CHILD branch color for handle/arrow
+                branchId: branchId,
+                isActive: isActive,
+                isOnActivePath: isActive && activeBranches.has(childBranchConnection.childBranchId),
+                childBranchName: childBranchData.branch.name || 'Branch',
+                childBranchDirection: branchDirection
+              }
+            });
+            
+            // Connect previous node to branch point - ensure perfectly vertical line
+            if (previousNodeId) {
+              // Define source handle based on previous node type
+              const sourceHandle = (() => {
+                if (previousNodeType === 'rootNode') return 'source-bottom';
+                if (previousNodeType === 'branchRootNode') return 'source-center';
+                if (previousNodeType === 'branchPointNode') return 'source-main';
+                return 'source-bottom'; // For station nodes, use consistent bottom handle
+              })();
+              
+              flowEdges.push({
+                id: `edge-${previousNodeId}-${station.branchPoint.id}`,
+                source: previousNodeId,
+                target: station.branchPoint.id,
+                sourceHandle: sourceHandle,
+                targetHandle: 'target-main',
+                type: 'straight',
+                style: { 
+                  stroke: color, 
+                  strokeWidth: isMainBranch ? 4 : 3,
+                  strokeLinecap: 'round' as const,
+                  opacity: isActive ? 1 : 0.85,
+                }
+              });
+            }
+            
+            // Add a curved connection from branch point to branch root
+            flowEdges.push({
+              id: `edge-branch-${station.branchPoint.id}-${childBranchConnection.branchRootId}`,
+              source: station.branchPoint.id,
+              target: childBranchConnection.branchRootId,
+              type: 'default', // Use default bezier curve for smoother transitions
+              animated: activeBranches.has(childBranchConnection.childBranchId),
+              // Set source and target handles based on branch direction
+              sourceHandle: branchDirection === 'right' ? 'right' : 'left',
+              targetHandle: 'left',
+              style: { 
+                stroke: childBranchData.color, 
+                strokeWidth: activeBranches.has(childBranchConnection.childBranchId) ? 4 : 3,
+                strokeOpacity: activeBranches.has(childBranchConnection.childBranchId) ? 1 : 0.85,
+                strokeLinecap: 'round' as const,
+                opacity: activeBranches.has(childBranchConnection.childBranchId) ? 1 : 0.85,
+              }
+            });
+            
+            // Update previous node
+            previousNodeId = station.branchPoint.id;
+            previousNodeType = 'branchPointNode';
           }
-        });
-        
-        // Update last node
-        lastNodeId = node.id;
+        } else {
+          // Create regular station node for message pairs
+          // Calculate a more accurate station width that accounts for content and styling
+          const contentLength = (station.userMessage?.message_text?.length || 0) + 
+                                (station.assistantMessage?.message_text?.length || 0);
+          
+          // Calculate width - much wider nodes for better visualization
+          // These values should match the actual rendered width in the StationNode component
+          let stationWidth = 140; // Base width for all station nodes
+          
+          // Scale width based on content length, but maintain a reasonable maximum
+          if (contentLength > 200) stationWidth = 180;
+          else if (contentLength > 100) stationWidth = 160;
+          
+          // Add extra width for padding and border
+          stationWidth += 16; // 8px padding × 2 + 2px border × 2
+          
+          // Get timestamp if available
+          const messageTimestamp = station.userMessage?.created_at || station.assistantMessage?.created_at;
+          
+          flowNodes.push({
+            id: station.id,
+            type: 'stationNode',
+            position: { 
+              x: xPosition - (stationWidth / 2), // Center the station with accurate width
+              y: station.yPosition 
+            },
+            data: {
+              color,
+              branchId,
+              isActive,
+              userContent: station.userMessage?.message_text || '',
+              assistantContent: station.assistantMessage?.message_text || '',
+              timestamp: messageTimestamp,
+              calculatedWidth: stationWidth,
+              stationNumber: index + 1, // Add station number for reference
+              fullData: {
+                userMessage: station.userMessage,
+                assistantMessage: station.assistantMessage,
+              }
+            }
+          });
+          
+          // Connect to previous node if exists
+          if (previousNodeId) {
+            // Determine source handle based on previous node type for perfect alignment
+            const sourceHandle = (() => {
+              if (previousNodeType === 'rootNode') return 'source-bottom';
+              if (previousNodeType === 'branchRootNode') return 'source-center';
+              if (previousNodeType === 'branchPointNode') return 'source-main';
+              return 'source-bottom'; // For station nodes, use consistent bottom handle
+            })();
+
+            flowEdges.push({
+              id: `edge-${previousNodeId}-${station.id}`,
+              source: previousNodeId,
+              target: station.id,
+              sourceHandle: sourceHandle,
+              targetHandle: 'target-top',
+              type: 'straight', // Straight vertical line
+              style: { 
+                stroke: color, 
+                strokeWidth: isMainBranch ? 4 : 3, // Thicker line for main branch
+                strokeLinecap: 'round' as const,
+                opacity: isActive ? 1 : 0.85, // Slightly fade inactive branches
+                filter: isActive ? 'none' : 'saturate(0.9)' // Slightly desaturate inactive branches
+              }
+            });
+          }
+          
+          // Update previous node
+          previousNodeId = station.id;
+          previousNodeType = 'stationNode';
+        }
       });
     });
     
@@ -528,26 +910,32 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       setError(null);
       
       try {
-        const url = `/api/nodes?project_id=${projectId}&complete_tree=true`;
-        const response = await fetch(url);
-        
-        if (!response.ok) {
-          throw new Error(`API request failed with status ${response.status}`);
+        // Fetch all branches for this project
+        const branchesResponse = await fetch(`/api/projects/${projectId}/branches`);
+        if (!branchesResponse.ok) {
+          throw new Error(`Failed to fetch branches: ${branchesResponse.status}`);
         }
+        const branches = await branchesResponse.json();
         
-        const data = await response.json();
-        console.log(`Received ${data.length} timeline nodes`);
+        // Fetch all nodes for this project
+        const nodesResponse = await fetch(`/api/nodes?project_id=${projectId}&limit=1000`);
+        if (!nodesResponse.ok) {
+          throw new Error(`Failed to fetch nodes: ${nodesResponse.status}`);
+        }
+        const nodes = await nodesResponse.json();
         
-        const { nodes: flowNodes, edges: flowEdges } = transformDataToReactFlow(data);
+        console.log(`Received ${nodes.length} timeline nodes and ${branches.length} branches`);
+        
+        const { nodes: flowNodes, edges: flowEdges } = transformDataToReactFlow(nodes, branches);
         
         setNodes(flowNodes);
         setEdges(flowEdges);
       } catch (error) {
         console.error('Failed to fetch minimap data:', error);
         setError(error instanceof Error ? error.message : 'Unknown error');
-      } finally {
-        setLoading(false);
-      }
+    } finally {
+      setLoading(false);
+    }
     };
     
     fetchData();
@@ -560,39 +948,48 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
     }
   }, [onSelectBranch]);
   
-  // Center view on the active node when it changes
+  // Center view on the active branch when it changes
   useEffect(() => {
     if (!loading && reactFlowInstance) {
-      const activeNode = nodes.find(node => 
-        node.data.branchId === currentBranchId || 
-        (currentBranchId === null && node.type === 'rootNode')
-      );
+      // Zoom to fit all nodes with a little padding
+      reactFlowInstance.fitView({ padding: 0.2, includeHiddenNodes: false });
       
-      if (activeNode) {
-        // Zoom to fit all nodes with a little padding
-        reactFlowInstance.fitView({ padding: 0.2, includeHiddenNodes: false });
+      // If we have a current branch, try to center on it
+      if (currentBranchId) {
+        // Find a node in the current branch
+        const branchNode = nodes.find(node => 
+          node.data.branchId === currentBranchId
+        );
         
-        // After fitView, center on the active node
-        setTimeout(() => {
-          reactFlowInstance.setCenter(activeNode.position.x, activeNode.position.y, { zoom: 1, duration: 800 });
-        }, 100);
+        if (branchNode) {
+          // Center on this branch's x-position, keeping the vertical position
+          const centerY = reactFlowInstance.getViewport().y;
+          reactFlowInstance.setCenter(branchNode.position.x, centerY, { 
+            zoom: 0.85, // Slightly zoomed in for better visibility
+            duration: 800 
+          });
+        }
       }
     }
   }, [currentBranchId, loading, nodes, reactFlowInstance]);
   
+  // Loading state
   if (loading && nodes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-4">
-        <div className="animate-pulse flex flex-col items-center gap-2">
-          <div className="h-8 w-8 rounded-full bg-primary/30"></div>
-          <div className="h-2 w-24 bg-muted rounded-full"></div>
-          <div className="h-2 w-32 bg-muted rounded-full mt-4"></div>
+        <div className="subway-loading-animation mb-6">
+          <div className="subway-line"></div>
+          <div className="subway-train"></div>
+          <div className="subway-station station-1"></div>
+          <div className="subway-station station-2"></div>
+          <div className="subway-station station-3"></div>
         </div>
-        <p className="text-sm text-muted-foreground mt-6">Loading subway map...</p>
+        <p className="text-sm text-muted-foreground">Loading subway map...</p>
       </div>
     );
   }
-  
+
+  // Error state
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-4 text-center">
@@ -603,8 +1000,155 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
     );
   }
   
+  // Find all unique branches represented in the nodes
+  const branchColors = new Map<string, { color: string, name?: string }>();
+  nodes.forEach(node => {
+    if (node.data.branchId && node.data.color) {
+      branchColors.set(node.data.branchId, { 
+        color: node.data.color,
+        name: node.data.branchName || undefined
+      });
+    }
+  });
+  
   return (
-    <div className="h-full w-full">
+    <div className="h-full w-full relative">
+      <style jsx global>{`
+        /* Custom subway-themed background */
+        .react-flow__background {
+          background-image: 
+            linear-gradient(to right, rgba(226, 232, 240, 0.1) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(226, 232, 240, 0.1) 1px, transparent 1px);
+          background-size: 20px 20px;
+        }
+        
+        /* Fade in animation for hover effects */
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-5px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fadeIn {
+          animation-name: fadeIn;
+          animation-duration: 0.3s;
+          animation-fill-mode: both;
+        }
+        
+        /* Make edges look more like subway lines */
+        .react-flow__edge-path {
+          stroke-linecap: round;
+          stroke-linejoin: round;
+        }
+        
+        /* Enhance the visualization with subtle zoom effects */
+        .react-flow__node {
+          transition: transform 0.2s ease;
+        }
+        
+        /* Subway loading animation styles */
+        .subway-loading-animation {
+          position: relative;
+          width: 200px;
+          height: 60px;
+        }
+        
+        .subway-line {
+          position: absolute;
+          top: 30px;
+          left: 0;
+          width: 100%;
+          height: 4px;
+          background-color: #3b82f6;
+          border-radius: 2px;
+        }
+        
+        .subway-train {
+          position: absolute;
+          top: 20px;
+          left: 0;
+          width: 20px;
+          height: 20px;
+          background-color: #3b82f6;
+          border-radius: 4px;
+          animation: train-move 3s infinite ease-in-out;
+        }
+        
+        .subway-station {
+          position: absolute;
+          top: 25px;
+          width: 10px;
+          height: 10px;
+          background-color: white;
+          border: 2px solid #3b82f6;
+          border-radius: 50%;
+        }
+        
+        .station-1 { left: 40px; }
+        .station-2 { left: 100px; }
+        .station-3 { left: 160px; }
+        
+        @keyframes train-move {
+          0% { left: 0; }
+          25% { left: 40px; }
+          35% { left: 40px; }
+          60% { left: 100px; }
+          70% { left: 100px; }
+          95% { left: 160px; }
+          100% { left: 180px; }
+        }
+        
+        /* Custom ReactFlow minimap styling */
+        .react-flow__minimap {
+          background-color: rgba(255, 255, 255, 0.9) !important;
+          border-radius: 8px !important;
+          border: 1px solid #e2e8f0 !important;
+          box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1) !important;
+        }
+      `}</style>
+      
+      {/* Branch legend toggle button */}
+      <div className="absolute top-4 right-4 z-10">
+        <button
+          className="bg-white p-2 rounded-md shadow-sm border border-gray-200 text-xs text-muted-foreground hover:bg-gray-50 transition-colors"
+          onClick={() => setShowBranchLabels(!showBranchLabels)}
+          title="Toggle branch labels"
+        >
+          <GitBranch size={16} />
+        </button>
+      </div>
+      
+      {/* Branch legend */}
+      {showBranchLabels && (
+        <div className="absolute top-14 right-4 z-10 bg-white p-2 rounded-md shadow-md border border-gray-200 max-w-[200px]">
+          <div className="text-xs font-semibold mb-1">Branch Lines</div>
+          <div className="max-h-[200px] overflow-y-auto">
+            {Array.from(branchColors.entries()).map(([branchId, { color, name }]) => (
+              <div 
+                key={branchId}
+                className={cn(
+                  "flex items-center py-1 px-2 text-xs rounded-sm cursor-pointer transition-colors",
+                  branchId === currentBranchId ? "bg-gray-100" : "hover:bg-gray-50"
+                )}
+                onClick={() => onSelectBranch(branchId)}
+              >
+                <div 
+                  className="w-3 h-3 rounded-full mr-2"
+                  style={{ backgroundColor: color }}
+                />
+                <div className="truncate">
+                  {name || `Branch ${branchId.substring(0, 4)}`}
+                </div>
+                {branchId === currentBranchId && (
+                  <div className="ml-auto">
+                    <div className="w-2 h-2 rounded-full bg-primary" />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -617,11 +1161,35 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
         maxZoom={1.5}
         defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
         proOptions={{ hideAttribution: true }}
+        nodesDraggable={false}
+        nodesFocusable={true}
+        elementsSelectable={true}
+        onlyRenderVisibleElements={true} // Performance optimization for large maps
       >
-        <Background color="#aaaaaa" gap={16} size={1} />
-        <Controls showInteractive={false} />
-        <ReactFlowMiniMap style={{ height: 100 }} zoomable pannable />
+        <Background color="#718096" gap={20} size={0.5} />
+        <Controls 
+          showInteractive={false}
+          className="bg-white bg-opacity-90 p-1 rounded-lg shadow-sm border border-gray-100"
+        />
+        <ReactFlowMiniMap 
+          style={{ 
+            height: 120,
+            backgroundColor: 'rgba(255, 255, 255, 0.9)',
+            borderRadius: '8px',
+            border: '1px solid #e2e8f0',
+            margin: '8px'
+          }} 
+          zoomable 
+          pannable 
+          maskColor="rgba(0, 0, 0, 0.1)"
+          nodeColor={(node) => {
+            // Highlight the current branch in the minimap
+            return node.data.branchId === currentBranchId 
+              ? node.data.color 
+              : `${node.data.color}80`; // Add 50% transparency
+          }}
+        />
       </ReactFlow>
     </div>
   );
-}
+} 

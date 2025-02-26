@@ -72,10 +72,11 @@ export interface ExpertSettings {
 // Main Project type
 export interface Project {
 	id: string;
-	title: string;
+	name: string;
 	description: string | null;
 	created_at: string;
 	updated_at: string;
+	created_by: string;
 	settings: Record<string, any> | null;
 	context: Record<string, any> | null;
 	metadata: Record<string, any> | null;
@@ -97,6 +98,27 @@ export interface Expert {
 	metadata: Record<string, any> | null;
 }
 
+// Branch type
+export interface Branch {
+	id: string;
+	project_id: string;
+	name: string | null;
+	parent_branch_id: string | null;
+	branch_point_node_id: string | null;
+	color: string | null;
+	depth: number;
+	is_active: boolean;
+	created_at: string;
+	created_by: string;
+	metadata: Record<string, any> | null;
+	// Additional fields from joins
+	parent_branch_name?: string;
+	parent_branch_color?: string;
+	message_count?: number;
+	child_branch_count?: number;
+	root_node_id?: string;
+}
+
 // Helper type for creating new projects
 export type CreateProject = Omit<Project, 'id' | 'created_at' | 'updated_at'>;
 
@@ -109,34 +131,67 @@ export type UpdateProject = Partial<CreateProject>;
 // Helper type for updating experts
 export type UpdateExpert = Partial<CreateExpert>;
 
-export type NodeType = 'root' | 'message' | 'fork';
-export type NodeStatus = 'archived' | 'hidden' | 'featured' | null;
+// Updated node types to match the new schema
+export type NodeType = 'root' | 'branch-root' | 'user-message' | 'assistant-message' | 'branch-point';
+export type NodeStatus = 'active' | 'archived' | 'hidden' | 'featured';
 
+// Base node interface
 interface BaseNode {
 	id: string;
 	project_id: string;
 	branch_id: string;
-	expert_id: string;
 	parent_id: string | null;
 	type: NodeType;
 	status: NodeStatus;
-	content: string;
+	message_text: string | null;
+	message_role: string | null;
+	position: number;
 	created_by: string;
 	created_at: string;
-	position: number;
 	metadata: Record<string, any> | null;
+	// Additional fields from joins
+	branch_name?: string;
+	branch_color?: string;
+	branch_depth?: number;
+	parent_branch_id?: string;
+	parent_branch_name?: string;
+	parent_branch_color?: string;
 }
 
-export interface MessageNode extends BaseNode {
-	type: 'message';
-}
-
-export interface ForkNode extends BaseNode {
-	type: 'fork';
-}
-
+// Root node (start of project)
 export interface RootNode extends BaseNode {
 	type: 'root';
 }
 
-export type TimelineNode = MessageNode | ForkNode | RootNode; 
+// Branch root node (start of a branch)
+export interface BranchRootNode extends BaseNode {
+	type: 'branch-root';
+}
+
+// User message node
+export interface UserMessageNode extends BaseNode {
+	type: 'user-message';
+	message_text: string;
+	message_role: 'user';
+}
+
+// Assistant message node
+export interface AssistantMessageNode extends BaseNode {
+	type: 'assistant-message';
+	message_text: string;
+	message_role: 'assistant';
+}
+
+// Branch point node (where branches diverge)
+export interface BranchPointNode extends BaseNode {
+	type: 'branch-point';
+	child_branches?: Branch[];
+}
+
+// Union type for all node types
+export type TimelineNode = 
+	| RootNode 
+	| BranchRootNode 
+	| UserMessageNode 
+	| AssistantMessageNode 
+	| BranchPointNode; 
