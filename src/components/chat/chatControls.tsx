@@ -9,112 +9,158 @@ import { cn } from '@/lib/utils';
 interface ChatControlsProps {
   projectId: string;
   branchId: string | null;
+  mainBranchId?: string;
+  onMessageSubmit?: () => void;
 }
 
-export function ChatControls({ projectId, branchId }: ChatControlsProps) {
-  const [userInput, setUserInput] = useState('');
-  const [sending, setSending] = useState(false);
+export function ChatControls({ projectId, branchId, mainBranchId, onMessageSubmit }: ChatControlsProps) {
+  const [message, setMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Focus the textarea when the component mounts
+  // Add component lifecycle debugging
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.focus();
-    }
-  }, []);
+    console.log('🔧 DEBUG: ChatControls mounted with projectId:', projectId, 'branchId:', branchId, 'mainBranchId:', mainBranchId);
+    return () => console.log('🔧 DEBUG: ChatControls unmounted');
+  }, [projectId, branchId, mainBranchId]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!userInput.trim() || sending) return;
-    
-    setSending(true);
+  // Function to adjust textarea height
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      console.log('🔧 DEBUG: Adjusting textarea height');
+      textarea.style.height = "auto";
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+  }, [message]);
+
+  // Function to fetch the last message node
+  const fetchLastMessageNode = async () => {
+    console.log('🔧 DEBUG: Fetching last message node');
     try {
-      // Find the parent ID for the new message
-      let parentId = null;
+      // Build the URL based on available parameters
+      let url = `/api/nodes?project_id=${projectId}`;
       
-      // If we have a branch ID, we need to fetch the last node in that branch
       if (branchId) {
-        const response = await fetch(`/api/nodes?project_id=${projectId}&branch_id=${branchId}`);
-        const data = await response.json();
-        
-        // Find the last node in the branch that is a message
-        const messageNodes = data
-          .filter((node: any) => node.type === 'message')
-          .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        
-        if (messageNodes.length > 0) {
-          parentId = messageNodes[0].id;
-        }
+        url += `&branch_id=${branchId}`;
+        console.log('🔧 DEBUG: Fetching from branch:', branchId);
+      } else if (mainBranchId) {
+        url += `&branch_id=${mainBranchId}`;
+        console.log('🔧 DEBUG: Fetching from main branch:', mainBranchId);
       } else {
-        // If no branch ID, fetch the root node
-        const response = await fetch(`/api/nodes?project_id=${projectId}&root=true`);
-        const data = await response.json();
-        
-        // The endpoint returns the root node and its immediate children
-        const rootNode = data.find((node: any) => node.type === 'root');
-        if (rootNode) {
-          parentId = rootNode.id;
-        }
+        url += '&root=true';
+        console.log('🔧 DEBUG: Fetching from root (no branch specified)');
       }
       
-      // If we couldn't find a parent ID, don't send the message
-      if (!parentId) {
-        console.error('No parent node found to attach message to');
+      console.log('🔧 DEBUG: Fetching from URL:', url);
+      const response = await fetch(url);
+      const data = await response.json();
+      console.log('🔧 DEBUG: Fetched nodes:', data);
+      
+      // Find the last message or the root node
+      let lastNode = data.find((node: any) => node.type === 'root');
+      
+      // Sort messages by creation time
+      const sortedMessages = data
+        .filter((node: any) => node.type === 'message')
+        .sort((a: any, b: any) => {
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
+      
+      if (sortedMessages.length > 0) {
+        lastNode = sortedMessages[0];
+        console.log('🔧 DEBUG: Found last message node:', lastNode.id);
+      } else {
+        console.log('🔧 DEBUG: No message nodes found, using root node');
+      }
+      
+      return lastNode;
+    } catch (error) {
+      console.error('🔧 DEBUG: Error fetching last message node:', error);
+      return null;
+    }
+  };
+
+  // Function to handle message submission
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!message.trim() || isLoading) {
+      console.log('🔧 DEBUG: Message submission skipped - empty or already loading');
+      return;
+    }
+    
+    console.log('🔧 DEBUG: Submitting message:', message.substring(0, 30) + (message.length > 30 ? '...' : ''));
+    setIsLoading(true);
+    
+    try {
+      // Find the last message node to set as parent
+      const lastNode = await fetchLastMessageNode();
+      if (!lastNode) {
+        console.error('🔧 DEBUG: No parent node found, cannot submit message');
         return;
       }
       
-      // Send the message
+      console.log('🔧 DEBUG: Using parent node:', lastNode.id);
+      
+      // Determine which branch ID to use
+      const effectiveBranchId = branchId || mainBranchId || '';
+      console.log('🔧 DEBUG: Using branch ID:', effectiveBranchId);
+      
+      // Prepare the message content in the correct format
+      const messageContent = {
+        role: 'user',
+        text: message
+      };
+      
+      console.log('🔧 DEBUG: Formatted message content:', messageContent);
+      
+      // Submit the message
       const response = await fetch('/api/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          projectId: projectId,
-          branchId: branchId,
-          parentId: parentId,
-          content: { text: userInput }
+          projectId,
+          branchId: effectiveBranchId,
+          parentId: lastNode.id,
+          content: messageContent
         }),
       });
       
       if (!response.ok) {
-        throw new Error('Failed to send message');
+        const errorText = await response.text();
+        console.error('🔧 DEBUG: Server error:', response.status, errorText);
+        throw new Error(`Server error: ${response.status} ${errorText}`);
       }
       
-      // Clear the input field
-      setUserInput('');
+      const data = await response.json();
+      console.log('🔧 DEBUG: Message submission response:', data);
       
-      // Resize the textarea back to its default height
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
+      // Clear the input
+      setMessage("");
+      
+      // Trigger onMessageSubmit callback if provided
+      if (onMessageSubmit) {
+        console.log('🔧 DEBUG: Calling onMessageSubmit callback');
+        onMessageSubmit();
       }
-      
-      // The new messages will be fetched by the MessageList component
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.error('🔧 DEBUG: Error submitting message:', error);
     } finally {
-      setSending(false);
+      setIsLoading(false);
     }
   };
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  // Handler for keyboard shortcuts
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Submit on Ctrl+Enter or Command+Enter
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      console.log('🔧 DEBUG: Keyboard shortcut detected: Ctrl/Cmd+Enter');
       e.preventDefault();
-      handleSubmit(e as unknown as FormEvent);
-    }
-  };
-
-  const adjustTextareaHeight = () => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      // Reset the height to get the correct scrollHeight
-      textarea.style.height = 'auto';
-      
-      // Set the height based on content with a maximum of 200px
-      const newHeight = Math.min(textarea.scrollHeight, 200);
-      textarea.style.height = `${newHeight}px`;
+      handleSubmit(e);
     }
   };
 
@@ -136,32 +182,31 @@ export function ChatControls({ projectId, branchId }: ChatControlsProps) {
           )}>
             <Textarea
               ref={textareaRef}
-              value={userInput}
+              value={message}
               onChange={(e) => {
-                setUserInput(e.target.value);
-                adjustTextareaHeight();
+                setMessage(e.target.value);
               }}
               onKeyDown={handleKeyDown}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
-              placeholder={sending ? "AI is thinking..." : "Type your message... (Ctrl+Enter to send)"}
+              placeholder={isLoading ? "AI is thinking..." : "Type your message... (Ctrl+Enter to send)"}
               className={cn(
                 "resize-none py-3 min-h-[52px] max-h-[200px] overflow-y-auto border-0",
                 "pr-14 transition-all duration-200 focus-visible:ring-0",
-                sending && "opacity-60"
+                isLoading && "opacity-60"
               )}
               autoComplete="off"
-              disabled={sending}
+              disabled={isLoading}
               rows={1}
             />
-            {userInput && !sending && (
+            {message && !isLoading && (
               <Button
                 type="button"
                 size="sm"
                 variant="ghost"
                 className="absolute right-3 top-1/2 -translate-y-1/2 h-7 w-7 p-0 text-muted-foreground"
                 onClick={() => {
-                  setUserInput('');
+                  setMessage('');
                   if (textareaRef.current) {
                     textareaRef.current.style.height = 'auto';
                     textareaRef.current.focus();
@@ -178,13 +223,13 @@ export function ChatControls({ projectId, branchId }: ChatControlsProps) {
             size="icon"
             className={cn(
               "h-[52px] w-[52px] shrink-0 transition-all duration-300 rounded-xl",
-              !userInput.trim() && "opacity-70",
-              sending && "animate-pulse-subtle bg-primary/80"
+              !message.trim() && "opacity-70",
+              isLoading && "animate-pulse-subtle bg-primary/80"
             )}
-            disabled={!userInput.trim() || sending}
-            variant={sending ? "outline" : "default"}
+            disabled={!message.trim() || isLoading}
+            variant={isLoading ? "outline" : "default"}
           >
-            {sending ? (
+            {isLoading ? (
               <Loader2 className="h-5 w-5 animate-spin" />
             ) : (
               <Send className="h-5 w-5" />
@@ -192,7 +237,7 @@ export function ChatControls({ projectId, branchId }: ChatControlsProps) {
           </Button>
         </div>
         
-        {sending && (
+        {isLoading && (
           <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground mt-3 animate-fadeIn">
             <div className="flex items-center gap-1.5 bg-primary/5 text-primary-foreground/80 px-3 py-1.5 rounded-full">
               <Sparkles className="h-3.5 w-3.5 text-primary animate-pulse" />
@@ -205,7 +250,7 @@ export function ChatControls({ projectId, branchId }: ChatControlsProps) {
                 className="h-6 text-xs ml-2 px-2 text-muted-foreground hover:text-destructive"
                 onClick={() => {
                   // TODO: In a real implementation, this would cancel the AI request
-                  setSending(false);
+                  setIsLoading(false);
                 }}
               >
                 <StopCircle className="h-3 w-3 mr-1" />
