@@ -1,14 +1,14 @@
 // app/page.tsx
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { ProjectDialog } from "@/components/projectDialog";
-// import { Minimap } from "@/components/minimap";
-import { MinimapWithContext } from "@/components/minimapWithContext";
+import { Minimap } from "@/components/minimap";
+// import { MinimapWithContext } from "@/components/minimapWithContext";
 import { ChatControls } from "@/components/chat/chatControls";
-import { ChatControlsWithContext } from "@/components/chat/chatControlsWithContext";
-// import { MessageList, MessageListRef } from "@/components/chat/messageList";
-import { MessageListWithContext } from "@/components/chat/messageListWithContext";
+// import { ChatControlsWithContext } from "@/components/chat/chatControlsWithContext";
+import { MessageList } from "@/components/chat/messageList";
+// import { MessageListWithContext } from "@/components/chat/messageListWithContext";
 import { Button } from "@/components/ui/button";
 import { 
 	PlusIcon, 
@@ -19,7 +19,7 @@ import {
 	ChevronDown,
 	Trash2
 } from "lucide-react";
-import { Project } from "@/lib/types/database";
+import { Project, TimelineNode } from "@/lib/types/database";
 import { H1 } from "@/components/ui/typography";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -41,102 +41,45 @@ import {
 	AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import { TimelineNode } from "@/lib/types/database";
-import { ReactFlowProvider } from "reactflow";
-import { ConversationProvider } from "@/lib/contexts/ConversationContext";
+import { useProject } from "@/lib/contexts/ProjectContext";
+import { useConversation } from "@/lib/contexts/ConversationContext";
 
 export default function Home() {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-	const [projects, setProjects] = useState<Project[]>([]);
-	const [loading, setLoading] = useState(true);
-	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-	const [currentBranchId, setCurrentBranchId] = useState<string | null>(null);
-	const [mainBranchId, setMainBranchId] = useState<string | null>(null);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-	const [streamingContent, setStreamingContent] = useState<string | null>(null);
 
-	const selectedProject = projects.find(p => p.id === selectedProjectId);
+	// Get project data from ProjectContext
+	const { 
+		projects, 
+		selectedProject, 
+		selectedProjectId, 
+		mainBranchId, 
+		loading: projectLoading, 
+		selectProject, 
+		createProject, 
+		deleteProject 
+	} = useProject();
+
+	// Get conversation data from ConversationContext
+	const {
+		currentBranchId,
+		switchBranch,
+		loading: conversationLoading
+	} = useConversation();
+
+	// Combined loading state
+	const loading = projectLoading || conversationLoading.data;
 
 	// Debugging: Track component mounting
 	useEffect(() => {
 		console.log('🔍 DEBUG: Main page component mounted');
 		return () => console.log('🔍 DEBUG: Main page component unmounted');
 	}, []);
-	
-	useEffect(() => {
-		const fetchProjects = async () => {
-			console.log('🔍 DEBUG: Fetching projects...');
-			setLoading(true);
-			try {
-				const response = await fetch("/api/projects");
-				const data = await response.json();
-				console.log('🔍 DEBUG: Projects fetched:', data.length, 'projects');
-				
-				// Map any title property to name for backward compatibility
-				const processedData = data.map((project: any) => ({
-					...project,
-					name: project.name || project.title || 'Unnamed Project'
-				}));
-				
-				setProjects(processedData);
-				
-				// If there are projects, select the first one
-				if (processedData.length > 0 && !selectedProjectId) {
-					console.log('🔍 DEBUG: Auto-selecting first project:', processedData[0].id, processedData[0].name);
-					setSelectedProjectId(processedData[0].id);
-				}
-			} catch (error) {
-				console.error("🔍 DEBUG: Failed to fetch projects:", error);
-			} finally {
-				setLoading(false);
-			}
-		};
-
-		fetchProjects();
-	}, [selectedProjectId]);
-
-	// Fetch main branch ID when project is selected
-	useEffect(() => {
-		const fetchMainBranch = async () => {
-			if (!selectedProjectId) return;
-			
-			console.log('🔍 DEBUG: Fetching main branch for project:', selectedProjectId);
-			try {
-				const response = await fetch(`/api/nodes?project_id=${selectedProjectId}&root=true`);
-				const data = await response.json();
-				
-				// Find the root node
-				const rootNode = data.find((node: TimelineNode) => node.type === 'root');
-				if (rootNode) {
-					console.log('🔍 DEBUG: Found root node:', rootNode.id, 'with branch:', rootNode.branch_id);
-					setMainBranchId(rootNode.branch_id);
-				} else {
-					console.warn('🔍 DEBUG: No root node found in response');
-				}
-			} catch (error) {
-				console.error("🔍 DEBUG: Failed to fetch root node:", error);
-			}
-		};
-		
-		fetchMainBranch();
-	}, [selectedProjectId]);
 
 	const handleCreateProject = async (name: string, description: string) => {
 		try {
-			const response = await fetch("/api/projects", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({ name, description }),
-			});
-
-			if (!response.ok) throw new Error("Failed to create project");
-
-			const newProject = await response.json();
-			setProjects([...projects, newProject]);
-			setSelectedProjectId(newProject.id);
+			await createProject(name, description);
 			setIsCreateDialogOpen(false);
 		} catch (error) {
 			console.error("Error creating project:", error);
@@ -147,31 +90,8 @@ export default function Home() {
 		if (!selectedProjectId) return;
 		
 		try {
-			const response = await fetch(`/api/projects/${selectedProjectId}`, {
-				method: "DELETE",
-			});
-
-			if (!response.ok) throw new Error("Failed to delete project");
-
-			// Remove the deleted project from the projects array
-			const updatedProjects = projects.filter(p => p.id !== selectedProjectId);
-			setProjects(updatedProjects);
-			
-			// Select another project if available, otherwise set to null
-			if (updatedProjects.length > 0) {
-				setSelectedProjectId(updatedProjects[0].id);
-			} else {
-				setSelectedProjectId(null);
-			}
-			
-			// Reset branch state
-			setCurrentBranchId(null);
-			setMainBranchId(null);
-			
-			// Close the delete dialog
+			await deleteProject(selectedProjectId);
 			setIsDeleteDialogOpen(false);
-			
-			console.log('🔍 DEBUG: Project deleted successfully');
 		} catch (error) {
 			console.error("Error deleting project:", error);
 		}
@@ -184,8 +104,8 @@ export default function Home() {
 		if (branchId !== currentBranchId) {
 			console.log('🔍 DEBUG: Switching from branch', currentBranchId, 'to branch', branchId);
 			
-			// Update the current branch ID
-			setCurrentBranchId(branchId);
+			// Use the context's switchBranch method
+			switchBranch(branchId);
 			
 			// Close the sidebar if it's open
 			if (isSidebarOpen) {
@@ -195,20 +115,6 @@ export default function Home() {
 			console.log('🔍 DEBUG: Already on branch', branchId);
 		}
 	};
-
-	// Safety check to ensure we always have a valid string for projectId
-	const safeProjectId = selectedProjectId || '';
-
-	// Add function to handle optimistic message updates
-	const handleOptimisticUpdate = (newMessages: TimelineNode[]) => {
-		// This function is now handled by the ConversationContext
-		// We keep it for backward compatibility with ChatControls
-		console.log('Optimistic update handled by ConversationContext');
-	};
-
-	// Reference to the MessageList component to access its handleOptimisticUpdate method
-	// This is no longer needed with the context approach
-	// const messageListRef = useRef<MessageListRef>(null);
 
 	return (
 		<main className="flex flex-col h-screen max-h-screen bg-background">
@@ -258,8 +164,8 @@ export default function Home() {
 																variant={project.id === selectedProjectId ? "secondary" : "ghost"}
 																className="w-full justify-start font-normal"
 																onClick={() => {
-																	setSelectedProjectId(project.id);
-																	setCurrentBranchId(null);
+																	selectProject(project.id);
+																	switchBranch(null); // Reset to main branch
 																}}
 															>
 																{project.name}
@@ -284,17 +190,9 @@ export default function Home() {
 														</div>
 													</div>
 												) : (
-													<ReactFlowProvider key={`flow-mobile-${safeProjectId}`}>
-														{/* Replace Minimap with MinimapWithContext wrapped in ConversationProvider */}
-														<ConversationProvider 
-															projectId={safeProjectId}
-															initialBranchId={currentBranchId}
-														>
-															<MinimapWithContext 
-																onSelectNode={(nodeId) => console.log('Node selected:', nodeId)}
-															/>
-														</ConversationProvider>
-													</ReactFlowProvider>
+														<Minimap 
+															onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
+														/>
 												)}
 											</div>
 										</div>
@@ -355,8 +253,8 @@ export default function Home() {
 									<DropdownMenuItem 
 										key={project.id}
 										onClick={() => {
-											setSelectedProjectId(project.id);
-											setCurrentBranchId(null);
+											selectProject(project.id);
+											switchBranch(null); // Reset to main branch
 										}}
 										className={cn(
 											"flex items-center gap-2",
@@ -402,76 +300,62 @@ export default function Home() {
 				{/* Main Content Area */}
 				{selectedProject ? (
 					<div className="w-full flex flex-col md:flex-row h-full">
-						{/* Wrap the entire content area in a ConversationProvider */}
-						<ConversationProvider 
-							projectId={safeProjectId}
-							initialBranchId={currentBranchId}
-							key={`conversation-${safeProjectId}-${currentBranchId || 'main'}`}
-						>
-							{/* Debug log moved to useEffect inside ConversationProvider */}
-							
-							{/* Subway Map Section */}
-							<div className="h-[250px] md:h-auto md:w-3/5 border-b md:border-b-0 md:border-r">
-								{loading ? (
-									<div className="h-full w-full flex items-center justify-center">
-										<div className="animate-pulse flex flex-col items-center gap-3">
-											<Train className="h-8 w-8 text-primary/30" />
-											<div className="h-2 w-32 bg-muted rounded-full"></div>
-											<div className="h-2 w-40 bg-muted rounded-full mt-2"></div>
-										</div>
+						{/* Subway Map Section */}
+						<div className="h-[250px] md:h-auto md:w-3/5 border-b md:border-b-0 md:border-r">
+							{loading ? (
+								<div className="h-full w-full flex items-center justify-center">
+									<div className="animate-pulse flex flex-col items-center gap-3">
+										<Train className="h-8 w-8 text-primary/30" />
+										<div className="h-2 w-32 bg-muted rounded-full"></div>
+										<div className="h-2 w-40 bg-muted rounded-full mt-2"></div>
 									</div>
-								) : (
-									<ReactFlowProvider key={`flow-${safeProjectId}`}>
-										{/* Replace Minimap with MinimapWithContext */}
-										<MinimapWithContext 
-											onSelectNode={(nodeId) => console.log('Node selected:', nodeId)}
-										/>
-									</ReactFlowProvider>
-								)}
-							</div>
-							
-							{/* Chat Section */}
-							<div className="flex-1 flex flex-col w-full md:w-2/5 overflow-hidden">
-								{/* Branch Info */}
-								{currentBranchId && (
-									<div className="px-4 pt-3 pb-2 flex items-center justify-between border-b">
-										<div className="flex items-center gap-2">
-											<GitBranch className="h-4 w-4 text-primary" />
-											<span className="text-sm font-medium">
-												Branch Active
-											</span>
-										</div>
-										<Button 
-											variant="ghost" 
-											size="sm" 
-											onClick={() => setCurrentBranchId(null)}
-											className="h-7 text-xs"
-										>
-											<Train className="h-3.5 w-3.5 mr-1.5" />
-											Return to Main Line
-										</Button>
-									</div>
-								)}
+								</div>
+							) : (
 								
-								{/* Chat Area */}
-								<div className="flex-1 overflow-hidden flex flex-col">
+									<Minimap 
+										onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
+									/>
+								
+							)}
+						</div>
+						
+						{/* Chat Section */}
+						<div className="flex-1 flex flex-col w-full md:w-2/5 overflow-hidden">
+							{/* Branch Info */}
+							{currentBranchId && (
+								<div className="px-4 pt-3 pb-2 flex items-center justify-between border-b">
+									<div className="flex items-center gap-2">
+										<GitBranch className="h-4 w-4 text-primary" />
+										<span className="text-sm font-medium">
+											Branch Active
+										</span>
+									</div>
+									<Button 
+										variant="ghost" 
+										size="sm" 
+										onClick={() => switchBranch(null)}
+										className="h-7 text-xs"
+									>
+										<Train className="h-3.5 w-3.5 mr-1.5" />
+										Return to Main Line
+									</Button>
+								</div>
+							)}
+							
+							{/* Chat Area */}
+							<div className="flex-1 overflow-hidden flex flex-col">
 									<div className="flex-1 overflow-y-auto pb-2">
-										{/* Replace MessageList with MessageListWithContext */}
-										<MessageListWithContext />
+										<MessageList />
 									</div>
 									
 									{/* Chat Controls */}
 									<div className="border-t bg-background/95 backdrop-blur-sm">
 										<div className="mx-auto">
-											{/* Replace ChatControls with ChatControlsWithContext */}
-											<ChatControlsWithContext 
-												onMessageSubmit={() => setStreamingContent(null)}
-											/>
+											<ChatControls />
 										</div>
 									</div>
-								</div>
 							</div>
-						</ConversationProvider>
+						</div>
 					</div>
 				) : (
 					<div className="flex items-center justify-center h-full">

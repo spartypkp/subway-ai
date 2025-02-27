@@ -1,7 +1,80 @@
+"use client";
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
-import { Branch, TimelineNode } from '@/lib/types/database';
+import { Branch, TimelineNode, NodeType } from '@/lib/types/database';
 import { BranchLayout } from '@/lib/layout/subwayLayoutService';
-import { query } from '@/lib/db';
+import { useProject } from './ProjectContext';
+import { Edge, Node } from 'reactflow';
+import { v4 as uuidv4 } from 'uuid';
+import { processStreamingResponse } from '@/lib/streaming';
+
+// React Flow node data interfaces
+interface BaseNodeData {
+  color: string;
+  branchId: string;
+  isActive: boolean;
+}
+
+interface RootNodeData extends BaseNodeData {
+  projectName: string;
+}
+
+interface BranchRootNodeData extends BaseNodeData {
+  branchName: string;
+  branchDirection: 'left' | 'right' | 'auto';
+}
+
+interface BranchPointNodeData extends BaseNodeData {
+  childBranchColor: string;
+  isOnActivePath: boolean;
+  childBranchName: string;
+  childBranchDirection: 'left' | 'right' | 'auto';
+  childCount: number;
+  siblingIndex: number;
+}
+
+interface StationNodeData extends BaseNodeData {
+  userContent: string;
+  assistantContent: string;
+  timestamp: string;
+  calculatedWidth: number;
+  stationNumber: number;
+  fullData: {
+    userMessage?: TimelineNode;
+    assistantMessage?: TimelineNode;
+  };
+}
+
+// TypeScript types for subway branch connection
+interface BranchConnection {
+  branchPointId: string;
+  branchRootId: string;
+  parentBranchId: string;
+  childBranchId: string;
+  position: number;
+  branchPointNode: TimelineNode;
+  direction?: 'left' | 'right' | 'auto';
+}
+
+// TypeScript types for subway station
+interface Station {
+  position: number;
+  yPosition: number;
+  id: string;
+  userMessage?: TimelineNode;
+  assistantMessage?: TimelineNode;
+  branchPoint?: TimelineNode;
+}
+
+// TypeScript types for branch map entry
+interface BranchMapEntry {
+  depth: number;
+  color: string;
+  nodes: TimelineNode[];
+  branch: Branch;
+  xPosition: number;
+  yOffset: number;
+  direction?: 'left' | 'right' | 'auto';
+}
 
 /**
  * ConversationContext
@@ -39,7 +112,7 @@ interface ConversationContextValue {
   fetchData: () => Promise<void>;
   fetchLayoutData: () => Promise<void>;
   recalculateLayout: () => Promise<void>;
-  switchBranch: (branchId: string) => void;
+  switchBranch: (branchId: string | null) => void;
   createBranch: (params: {
     branchPointNodeId: string;
     name?: string;
@@ -47,12 +120,21 @@ interface ConversationContextValue {
   }) => Promise<string>;
   handleOptimisticUpdate: (newMessages: TimelineNode[]) => void;
   updateStreamingContent: (content: string | null) => void;
+  sendMessage: (text: string) => Promise<void>;
+  updateMessageState: (params: {
+    action: 'create' | 'update' | 'stream' | 'error';
+    userMessage?: string;
+    parentId?: string;
+    streamContent?: string;
+    messageId?: string;
+    errorMessage?: string;
+  }) => any;
   
   // Utility functions
   getBranchColor: (branchId: string) => string;
   getBranchName: (branchId: string) => string;
   getBranchPath: (targetBranchId: string | null) => TimelineNode[];
-  getNodesForReactFlow: () => { nodes: any[]; edges: any[] };
+  getNodesForReactFlow: () => { nodes: Node<BaseNodeData>[]; edges: Edge[] };
 }
 
 // Create the context with a default undefined value
@@ -60,24 +142,19 @@ const ConversationContext = createContext<ConversationContextValue | undefined>(
 
 // Props for the provider component
 interface ConversationProviderProps {
-  projectId: string;
-  initialBranchId?: string | null;
   children: ReactNode;
   pollingInterval?: number;
 }
 
 export const ConversationProvider: React.FC<ConversationProviderProps> = ({
-  projectId,
-  initialBranchId = null,
   children,
   pollingInterval = 5000,
 }) => {
-  // Add debugging logs
-  useEffect(() => {
-    console.log('🔍 DEBUG: ConversationProvider initialized with:');
-    console.log('🔍 DEBUG: - projectId:', projectId, typeof projectId);
-    console.log('🔍 DEBUG: - initialBranchId:', initialBranchId, typeof initialBranchId);
-  }, [projectId, initialBranchId]);
+  // Get project data from ProjectContext
+  const { selectedProjectId, mainBranchId } = useProject();
+  
+  // Ensure we have a valid project ID
+  const projectId = selectedProjectId || '';
 
   // Data state
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -85,7 +162,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   const [layoutData, setLayoutData] = useState<Record<string, BranchLayout> | null>(null);
   
   // UI state
-  const [currentBranchId, setCurrentBranchId] = useState<string | null>(initialBranchId);
+  const [currentBranchId, setCurrentBranchId] = useState<string | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<TimelineNode[]>([]);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
@@ -96,8 +173,43 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     layout: false,
   });
 
+  // Add debugging logs
+  useEffect(() => {
+    console.log('🔍 DEBUG: ConversationProvider initialized with:');
+    console.log('🔍 DEBUG: - projectId:', projectId, typeof projectId);
+    console.log('🔍 DEBUG: - currentBranchId:', currentBranchId, typeof currentBranchId);
+  }, [projectId, currentBranchId]);
+
+  // Reset state when project changes
+  useEffect(() => {
+    // Clear state when project changes
+    setBranches([]);
+    setAllNodes([]);
+    setLayoutData(null);
+    setOptimisticMessages([]);
+    setStreamingMessageId(null);
+    setStreamingContent(null);
+    
+    // Reset to main branch when project changes
+    setCurrentBranchId(null);
+    
+    // Set loading state
+    setLoading({
+      data: true,
+      layout: true,
+    });
+    
+    // Fetch data for the new project if we have a valid project ID
+    if (projectId) {
+      fetchData();
+      fetchLayoutData();
+    }
+  }, [projectId]);
+
   // Fetch all branches for the project
   const fetchBranches = async (): Promise<Branch[]> => {
+    if (!projectId) return [];
+    
     try {
       const response = await fetch(`/api/projects/${projectId}/branches`);
       if (!response.ok) {
@@ -114,6 +226,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Fetch all nodes for the project
   const fetchNodes = async (): Promise<TimelineNode[]> => {
+    if (!projectId) return [];
+    
     try {
       const url = `/api/nodes?project_id=${projectId}&complete_tree=true`;
       const response = await fetch(url);
@@ -133,6 +247,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Fetch layout data for branches
   const fetchLayoutData = async (): Promise<void> => {
+    if (!projectId) return;
+    
     setLoading(prev => ({ ...prev, layout: true }));
     try {
       const response = await fetch(`/api/projects/${projectId}/layout`);
@@ -150,6 +266,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Recalculate layout for all branches
   const recalculateLayout = async (): Promise<void> => {
+    if (!projectId) return;
+    
     setLoading(prev => ({ ...prev, layout: true }));
     try {
       const response = await fetch(`/api/projects/${projectId}/layout`, {
@@ -175,6 +293,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Main data fetching function
   const fetchData = async (): Promise<void> => {
+    if (!projectId) return;
+    
     console.log('🔍 DEBUG: Fetching data for project:', projectId, 'branch:', currentBranchId || 'main');
     setLoading(prev => ({ ...prev, data: true }));
     
@@ -239,12 +359,12 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   };
 
   // Switch to a different branch
-  const switchBranch = useCallback((branchId: string) => {
-    console.log('Switching to branch:', branchId);
+  const switchBranch = useCallback((branchId: string | null) => {
+    console.log('Switching to branch:', branchId || 'main');
     
     // Prevent switching to the same branch
     if (branchId === currentBranchId) {
-      console.log('Already on branch:', branchId);
+      console.log('Already on branch:', branchId || 'main');
       return;
     }
     
@@ -260,6 +380,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     name?: string;
     createdBy?: string;
   }): Promise<string> => {
+    if (!projectId) throw new Error('No project selected');
+    
     const { branchPointNodeId, name, createdBy = 'user' } = params;
     
     try {
@@ -318,12 +440,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         
         if (existingIndex >= 0) {
           // Update existing message
-          updated[existingIndex] = {
-            ...updated[existingIndex],
-            ...newMsg,
-            // Preserve the ID to ensure we update the right message
-            id: updated[existingIndex].id
-          };
+          updated[existingIndex] = newMsg;
         } else {
           // Add new message
           updated.push(newMsg);
@@ -337,20 +454,240 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   // Update streaming content
   const updateStreamingContent = useCallback((content: string | null) => {
     setStreamingContent(content);
+  }, []);
+
+  // Create a unified message update function that handles both optimistic UI and streaming updates
+  const updateMessageState = useCallback((params: {
+    action: 'create' | 'update' | 'stream' | 'error';
+    userMessage?: string;
+    parentId?: string;
+    streamContent?: string;
+    messageId?: string;
+    errorMessage?: string;
+  }) => {
+    const { action, userMessage, parentId, streamContent, messageId, errorMessage } = params;
     
-    if (content !== null && streamingMessageId) {
-      setOptimisticMessages(prev => 
-        prev.map(msg => 
-          msg.id === streamingMessageId
-            ? { ...msg, message_text: content, isLoading: false }
-            : msg
-        )
-      );
-    } else if (content === null) {
-      // Reset streamingMessageId when streaming ends
-      setStreamingMessageId(null);
+    switch (action) {
+      case 'create': {
+        // Create new optimistic messages (user + empty AI response)
+        if (!userMessage || !parentId) return;
+        
+        const timestamp = new Date().toISOString();
+        const effectiveBranchId = currentBranchId || '';
+        const optimisticUserId = uuidv4();
+        const optimisticAiId = uuidv4();
+        
+        // User message
+        const optimisticUserMessage: TimelineNode = {
+          id: optimisticUserId,
+          project_id: projectId,
+          branch_id: effectiveBranchId,
+          parent_id: parentId,
+          type: 'user-message' as NodeType,
+          message_text: userMessage,
+          message_role: 'user',
+          position: 0,
+          created_by: 'user',
+          created_at: timestamp,
+          optimistic: true
+        };
+        
+        // AI message (empty at first)
+        const optimisticAiMessage: TimelineNode = {
+          id: optimisticAiId,
+          project_id: projectId,
+          branch_id: effectiveBranchId,
+          parent_id: optimisticUserId,
+          type: 'assistant-message' as NodeType,
+          message_text: '',
+          message_role: 'assistant',
+          position: 0,
+          created_by: 'assistant',
+          created_at: timestamp,
+          optimistic: true,
+          isLoading: true
+        };
+        
+        // Add both messages to the UI
+        handleOptimisticUpdate([optimisticUserMessage, optimisticAiMessage]);
+        
+        // Set streaming message ID and initialize content
+        setStreamingMessageId(optimisticAiId);
+        setStreamingContent('');
+        
+        return {
+          optimisticUserId,
+          optimisticAiId,
+          optimisticUserMessage,
+          optimisticAiMessage
+        };
+      }
+      
+      case 'stream': {
+        // Update streaming message content
+        if (streamContent === undefined) return;
+        
+        // Update the streaming content state
+        setStreamingContent(streamContent);
+        
+        // Find the currently streaming message
+        if (streamingMessageId) {
+          // Update the optimistic message with new content
+          setOptimisticMessages(prev => {
+            return prev.map(msg => {
+              if (msg.id === streamingMessageId) {
+                return {
+                  ...msg,
+                  message_text: streamContent,
+                  isLoading: false
+                };
+              }
+              return msg;
+            });
+          });
+        }
+        break;
+      }
+      
+      case 'update': {
+        // Update a specific message
+        if (!messageId) return;
+        
+        setOptimisticMessages(prev => {
+          return prev.map(msg => {
+            if (msg.id === messageId) {
+              return {
+                ...msg,
+                ...(streamContent && { message_text: streamContent }),
+                isLoading: false
+              };
+            }
+            return msg;
+          });
+        });
+        break;
+      }
+      
+      case 'error': {
+        // Show error message in the optimistic AI message
+        const errorText = errorMessage || "I'm sorry, I encountered an error processing your request. Please try again.";
+        
+        setOptimisticMessages(prev => {
+          return prev.map(msg => {
+            // Find the AI message that's loading
+            if (msg.type === 'assistant-message' && (msg.isLoading || msg.id === streamingMessageId)) {
+              return {
+                ...msg,
+                message_text: errorText,
+                isLoading: false
+              };
+            }
+            return msg;
+          });
+        });
+        
+        // Clear streaming state
+        setStreamingMessageId(null);
+        setStreamingContent(null);
+        break;
+      }
     }
-  }, [streamingMessageId]);
+  }, [currentBranchId, handleOptimisticUpdate, projectId, streamingMessageId]);
+
+  // Now update the sendMessage method to use the new unified update function
+  const sendMessage = async (text: string): Promise<void> => {
+    if (!projectId) throw new Error('No project selected');
+    if (!text.trim()) return;
+    
+    try {
+      // Get the last message to use as parent
+      const lastNode = getLastMessageNode();
+      if (!lastNode) throw new Error('No parent node found');
+      
+      // Create optimistic updates using the unified method
+      const optimisticData = updateMessageState({
+        action: 'create',
+        userMessage: text,
+        parentId: lastNode.id
+      });
+      
+      if (!optimisticData) return;
+      
+      // Submit the message with streaming enabled
+      const response = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          branch_id: currentBranchId || '',
+          parent_id: lastNode.id,
+          text: text.trim(),
+          created_by: 'user',
+          stream: true
+        })
+      });
+      
+      // Handle streaming response
+      if (response.headers.get('content-type')?.includes('text/event-stream')) {
+        await processStreamingResponse(
+          response,
+          (streamedText) => {
+            // Use unified method for streaming updates
+            updateMessageState({
+              action: 'stream',
+              streamContent: streamedText
+            });
+          },
+          () => {
+            // When streaming is complete, clear streaming state and refresh data
+            setStreamingMessageId(null);
+            setStreamingContent(null);
+            fetchData();
+          }
+        );
+      } else {
+        // Handle non-streaming response
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Server error: ${response.status} ${errorText}`);
+        }
+        
+        // Just refresh data
+        fetchData();
+      }
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      // Show error message using the unified method
+      updateMessageState({
+        action: 'error',
+        errorMessage: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+    }
+  };
+  
+  // Get the last message node to use as parent for new messages
+  const getLastMessageNode = (): TimelineNode | null => {
+    if (!allNodes || allNodes.length === 0) return null;
+    
+    // Find messages in the current branch
+    const branchMessages = currentBranchId 
+      ? allNodes.filter(node => node.branch_id === currentBranchId)
+      : allNodes;
+    
+    // First try to find the last user or assistant message
+    const sortedMessages = [...branchMessages]
+      .filter(node => node.type === 'user-message' || node.type === 'assistant-message')
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    
+    if (sortedMessages.length > 0) return sortedMessages[0];
+    
+    // If no messages in current branch, find the branch root or project root
+    const rootNode = currentBranchId
+      ? branchMessages.find(node => node.type === 'branch-root')
+      : allNodes.find(node => node.type === 'root');
+    
+    return rootNode || null;
+  };
 
   // Get branch color based on branch ID
   const getBranchColor = useCallback((branchId: string): string => {
@@ -480,23 +817,503 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Transform nodes for React Flow (Minimap)
   const getNodesForReactFlow = useCallback(() => {
-    // This is a placeholder - we'll implement the transformation logic
-    // that's currently in the Minimap component
-    return {
-      nodes: [],
-      edges: []
+    // Early return if we don't have data
+    if (!allNodes.length || !branches.length) return { nodes: [] as Node<BaseNodeData>[], edges: [] as Edge[] };
+    
+    const flowNodes: Node<BaseNodeData>[] = [];
+    const flowEdges: Edge[] = [];
+    
+    // Calculate branch positions
+    const branchMap = new Map<string, BranchMapEntry>();
+    
+    // Find the main branch (depth 0)
+    const mainBranch = branches.find(b => b.depth === 0);
+    if (!mainBranch) {
+      console.warn('No main branch found');
+      return { nodes: [] as Node<BaseNodeData>[], edges: [] as Edge[] };
+    }
+    
+    console.log(`Main branch: ${mainBranch.id}, ${mainBranch.name || 'Unnamed'}`);
+    
+    // Sort branches by depth
+    const sortedBranches = [...branches].sort((a, b) => a.depth - b.depth);
+    
+    // Center position for the visualization
+    const centerX = 400; 
+    
+    // Responsive branch spacing based on viewport width (for fallback calculations)
+    const getResponsiveBranchSpacing = () => {
+      const width = typeof window !== 'undefined' ? window.innerWidth : 1200;
+      if (width < 640) return 180; // Small screens
+      if (width < 1024) return 220; // Medium screens
+      return 250; // Large screens
     };
-  }, [allNodes, branches, layoutData]);
+    
+    const branchSpacing = getResponsiveBranchSpacing();
+    
+    // Scaling factors for layout coordinates to ReactFlow coordinates
+    const xScaleFactor = 1.5;  // Adjust based on visual testing
+    const yScaleFactor = 100;  // Vertical spacing between nodes
+    
+    // Assign positions using layout data when available, fall back to default calculation
+    sortedBranches.forEach(branch => {
+      let xPosition;
+      let yOffset = 0;
+      let direction: 'left' | 'right' | 'auto' = 'auto';
+      
+      // If we have layout data for this branch, use it
+      if (layoutData && layoutData[branch.id]) {
+        const layout = layoutData[branch.id];
+        
+        // Apply proper coordinate scaling from layout service to ReactFlow
+        xPosition = centerX + (layout.x * xScaleFactor);
+        yOffset = layout.siblingIndex * 30; // Vertical offset based on sibling index
+        
+        // Use direction from layout data
+        direction = layout.direction;
+        
+        console.log(`Using layout data for branch ${branch.id}: x=${xPosition}, yOffset=${yOffset}, direction=${direction}`);
+      } else {
+        // Fall back to the old calculation method
+        if (branch.depth === 0) {
+          xPosition = centerX; // Main branch in center
+          direction = 'right'; // Default direction for main branch
+        } else if (branch.depth % 2 === 1) {
+          xPosition = centerX + (Math.ceil(branch.depth / 2) * branchSpacing);
+          direction = 'right';
+        } else {
+          xPosition = centerX - (branch.depth / 2 * branchSpacing);
+          direction = 'left';
+        }
+      }
+      
+      branchMap.set(branch.id, {
+        depth: branch.depth,
+        color: branch.color || getBranchColor(branch.id),
+        nodes: [],
+        branch,
+        xPosition,
+        yOffset,
+        direction
+      });
+    });
+    
+    // Group nodes by branch
+    allNodes.forEach(node => {
+      const branchData = branchMap.get(node.branch_id);
+      if (branchData) {
+        branchData.nodes.push(node);
+      } else {
+        console.warn(`No branch found for node ${node.id} (branch_id: ${node.branch_id})`);
+      }
+    });
+    
+    // Track active branches (highlighting the current path)
+    const activeBranches = new Set<string>();
+    if (currentBranchId) {
+      // Add the current branch
+      activeBranches.add(currentBranchId);
+      
+      // Find parent branches
+      let currentBranch = branches.find(b => b.id === currentBranchId);
+      while (currentBranch && currentBranch.parent_branch_id) {
+        activeBranches.add(currentBranch.parent_branch_id);
+        currentBranch = branches.find(b => b.id === currentBranch?.parent_branch_id);
+      }
+    } else {
+      // If no current branch, highlight main branch
+      activeBranches.add(mainBranch.id);
+    }
+    
+    // Find the root node
+    const rootNode = allNodes.find(n => n.type === 'root');
+    if (!rootNode) {
+      console.warn('No root node found in data');
+      return { nodes: [] as Node<BaseNodeData>[], edges: [] as Edge[] };
+    }
+    
+    // Get the project name (if available)
+    const projectName = mainBranch.name || 'Main Line';
+    
+    // Add root node
+    const mainBranchData = branchMap.get(mainBranch.id);
+    if (!mainBranchData) {
+      console.warn('Main branch data not found');
+      return { nodes: [] as Node<BaseNodeData>[], edges: [] as Edge[] };
+    }
+    
+    // Add root node at the top of the main branch - ENSURE perfect X alignment with stations
+    // Root node is 46px wide, so adjust x position to center it on the branch line
+    flowNodes.push({
+      id: rootNode.id,
+      type: 'rootNode',
+      position: { 
+        x: mainBranchData.xPosition - 23, // Center the 46px wide root node
+        y: 50 
+      },
+      data: {
+        color: mainBranchData.color,
+        branchId: mainBranch.id,
+        isActive: activeBranches.has(mainBranch.id),
+        projectName
+      } as RootNodeData
+    });
+    
+    // Process branch connections first (to establish the subway layout)
+    const branchConnections: BranchConnection[] = [];
+    
+    // Find all branch connections
+    branches.forEach(branch => {
+      if (branch.parent_branch_id && branch.branch_point_node_id) {
+        // Find the branch point node
+        const branchPointNode = allNodes.find(n => n.id === branch.branch_point_node_id);
+        if (!branchPointNode) return;
+        
+        // Find the branch root node in this branch
+        const branchRootNode = allNodes.find(n => 
+          n.type === 'branch-root' && n.branch_id === branch.id
+        );
+        if (!branchRootNode) return;
+        
+        // Get direction from layout data if available
+        let direction: 'left' | 'right' | 'auto' | undefined = undefined;
+        if (layoutData && layoutData[branch.id]) {
+          direction = layoutData[branch.id].direction;
+        }
+        
+        branchConnections.push({
+          branchPointId: branch.branch_point_node_id,
+          branchRootId: branchRootNode.id,
+          parentBranchId: branch.parent_branch_id,
+          childBranchId: branch.id,
+          position: branchPointNode.position,
+          branchPointNode,
+          direction
+        });
+      }
+    });
+    
+    // Process each branch to create subway lines with stations
+    branchMap.forEach((branchData, branchId) => {
+      const { xPosition, color, nodes: branchNodes, branch } = branchData;
+      const isActive = activeBranches.has(branchId);
+      const isMainBranch = branchId === mainBranch.id;
+      
+      // This is the true center position of this branch line
+      const branchCenterX = xPosition;
+      
+      // Get branch name
+      const branchName = branch.name || `Branch ${branch.depth}`;
+      
+      // Sort all nodes by position
+      const sortedNodes = [...branchNodes].sort((a, b) => a.position - b.position);
+      
+      // Find specific node types
+      const branchRoot = sortedNodes.find(n => n.type === 'branch-root');
+      
+      // Filter for just message nodes and branch points
+      const messageNodes = sortedNodes.filter(n => 
+        n.type === 'user-message' || n.type === 'assistant-message' || n.type === 'branch-point'
+      );
+      
+      // Create "stations" from the messages
+      // A station can be:
+      // 1. A user message with its corresponding assistant response
+      // 2. A branch point (which appears on the parent branch)
+      // 3. A solo user message (if no response)
+      // 4. A solo assistant message (rare edge case)
+      
+      const stations: Station[] = [];
+      
+      // Track processed nodes to avoid duplicates
+      const processedNodes = new Set<string>();
+      
+      // Process message pairs and branch points
+      messageNodes.forEach(node => {
+        // Skip if already processed
+        if (processedNodes.has(node.id)) return;
+        
+        // Mark this node as processed
+        processedNodes.add(node.id);
+        
+        if (node.type === 'branch-point') {
+          // Add branch point as its own station
+          stations.push({
+            position: node.position,
+            yPosition: 150 + (node.position * 100),
+            id: node.id,
+            branchPoint: node
+          });
+        } else if (node.type === 'user-message') {
+          // Find corresponding assistant message (if any)
+          const assistantMessage = messageNodes.find(n => 
+            n.type === 'assistant-message' && n.parent_id === node.id
+          );
+          
+          // If found, mark it as processed
+          if (assistantMessage) {
+            processedNodes.add(assistantMessage.id);
+          }
+          
+          stations.push({
+            position: node.position,
+            yPosition: 150 + (node.position * 100),
+            id: node.id,
+            userMessage: node,
+            assistantMessage
+          });
+        } else if (node.type === 'assistant-message' && !processedNodes.has(node.id)) {
+          // Handle solo assistant messages
+          stations.push({
+            position: node.position,
+            yPosition: 150 + (node.position * 100),
+            id: node.id,
+            assistantMessage: node
+          });
+        }
+      });
+      
+      // Sort stations by position
+      stations.sort((a, b) => a.position - b.position);
 
-  // Initial data load
-  useEffect(() => {
-    fetchData();
-    fetchLayoutData();
-  }, [projectId]);
+      // Apply vertical offset to branch root position
+      let branchRootYPosition = 150; // Default Y position
+      if (branchRoot) {
+        // Find the matching branch connection
+        const connection = branchConnections.find(c => c.branchRootId === branchRoot.id);
+        
+        if (connection) {
+          // Calculate branch root Y position (same as the branch point)
+          branchRootYPosition = 150 + (connection.position * 100);
+          
+          // Add the branch root node - BranchRootNode is 28px wide
+          flowNodes.push({
+            id: branchRoot.id,
+            type: 'branchRootNode',
+            position: { 
+              x: xPosition - 14, // Center the 28px wide branch root
+              y: branchRootYPosition 
+            },
+            data: {
+              color,
+              branchId,
+              isActive,
+              branchName: branch.metadata?.siblingInfo 
+                ? `${branchName} ${branch.metadata.siblingInfo}` 
+                : branchName,
+              branchDirection: branchData.direction || // First use branch data from layout
+                              connection.direction || // Then connection direction from layout
+                              (branchData.xPosition > mainBranchData.xPosition ? 'right' : 'left') // Fallback calculation
+            } as BranchRootNodeData
+          });
+        }
+      }
+      
+      // Add station nodes and connect them with straight lines
+      let previousNodeId: string | undefined = undefined;
+      let previousNodeType: string | undefined = undefined;
+      
+      // If this is the main branch, start from the root
+      if (branchId === mainBranch.id) {
+        previousNodeId = rootNode.id;
+        previousNodeType = 'rootNode';
+      } 
+      // If this is a child branch, start from the branch root
+      else if (branchRoot) {
+        previousNodeId = branchRoot.id;
+        previousNodeType = 'branchRootNode';
+      }
+
+      // For child branches, adjust station Y positions to start below the branch root
+      // This ensures child branch stations are properly positioned in relation to the branch root
+      if (branchId !== mainBranch.id && branchRoot) {
+        // Get any vertical offset that was applied to this branch
+        const verticalOffset = branchData.yOffset || 0;
+        
+        // Recalculate Y positions for stations in child branches
+        stations.forEach((station, index) => {
+          // Start positioning stations below the branch root with proper spacing
+          // Add a little extra spacing for the first station to create separation from the branch root
+          const spacing = index === 0 ? 120 : 100;
+          station.yPosition = branchRootYPosition + ((index + 1) * spacing);
+        });
+      }
+      
+      // Process stations in order
+      stations.forEach((station, index) => {
+        if (station.branchPoint) {
+          // This is a branch point - add it specifically as a branch point node
+          
+          // Find the child branch that stems from this branch point
+          const childBranchConnection = branchConnections.find(conn => 
+            conn.branchPointId === station.branchPoint?.id
+          );
+          
+          if (childBranchConnection) {
+            // Get child branch data for styling
+            const childBranchData = branchMap.get(childBranchConnection.childBranchId);
+            if (!childBranchData) return;
+            
+            // Use direction from layout service when available, otherwise calculate it
+            const branchDirection = childBranchConnection.direction || 
+                                    (childBranchData.direction || 
+                                    (childBranchData.xPosition > xPosition ? 'right' : 'left'));
+            
+            // Add branch point node - ENSURE perfect X alignment with parent branch
+            flowNodes.push({
+              id: station.branchPoint.id,
+              type: 'branchPointNode',
+              position: { 
+                x: xPosition - 16, // Center the 32px wide branch point
+                y: station.yPosition 
+              },
+              data: {
+                color: color, // Use THIS branch's color for the branch point
+                childBranchColor: childBranchData.color, // Use CHILD branch color for handle/arrow
+                branchId: branchId,
+                isActive: isActive,
+                isOnActivePath: isActive && activeBranches.has(childBranchConnection.childBranchId),
+                childBranchName: childBranchData.branch.name || 'Branch',
+                childBranchDirection: branchDirection,
+                childCount: childBranchData.branch.metadata?.siblingCount || 1,
+                siblingIndex: childBranchData.branch.metadata?.siblingIndex || 0
+              } as BranchPointNodeData
+            });
+            
+            // Connect previous node to branch point - ensure perfectly vertical line
+            if (previousNodeId) {
+              // Define source handle based on previous node type
+              const sourceHandle = (() => {
+                if (previousNodeType === 'rootNode') return 'source-bottom';
+                if (previousNodeType === 'branchRootNode') return 'source-center';
+                if (previousNodeType === 'branchPointNode') return 'source-main';
+                return 'source-bottom'; // For station nodes, use consistent bottom handle
+              })();
+              
+              flowEdges.push({
+                id: `edge-${previousNodeId}-${station.branchPoint.id}`,
+                source: previousNodeId,
+                target: station.branchPoint.id,
+                sourceHandle: sourceHandle,
+                targetHandle: 'target-main',
+                type: 'straight',
+                style: { 
+                  stroke: color, 
+                  strokeWidth: isMainBranch ? 4 : 3,
+                  strokeLinecap: 'round',
+                  opacity: isActive ? 1 : 0.85,
+                }
+              });
+            }
+            
+            // Add a curved connection from branch point to branch root
+            flowEdges.push({
+              id: `edge-branch-${station.branchPoint.id}-${childBranchConnection.branchRootId}`,
+              source: station.branchPoint.id,
+              target: childBranchConnection.branchRootId,
+              type: 'default', // Use default bezier curve for smoother transitions
+              animated: activeBranches.has(childBranchConnection.childBranchId),
+              // Set source and target handles based on branch direction
+              sourceHandle: branchDirection === 'right' ? 'right' : 'left',
+              targetHandle: 'left',
+              style: { 
+                stroke: childBranchData.color, 
+                strokeWidth: activeBranches.has(childBranchConnection.childBranchId) ? 4 : 3,
+                strokeOpacity: activeBranches.has(childBranchConnection.childBranchId) ? 1 : 0.85,
+                strokeLinecap: 'round',
+                opacity: activeBranches.has(childBranchConnection.childBranchId) ? 1 : 0.85,
+                // Add smooth curve effect for a more subway-like appearance
+                strokeDasharray: activeBranches.has(childBranchConnection.childBranchId) ? undefined : '0',
+              }
+            });
+            
+            // Update previous node
+            previousNodeId = station.branchPoint.id;
+            previousNodeType = 'branchPointNode';
+          }
+        } else {
+          // Create regular station node for message pairs
+          // Calculate a more accurate station width that accounts for content and styling
+          const contentLength = (station.userMessage?.message_text?.length || 0) + 
+                                (station.assistantMessage?.message_text?.length || 0);
+          
+          // Calculate width - much wider nodes for better visualization
+          // These values should match the actual rendered width in the StationNode component
+          let stationWidth = 140; // Base width for all station nodes
+          
+          // Scale width based on content length, but maintain a reasonable maximum
+          if (contentLength > 200) stationWidth = 180;
+          else if (contentLength > 100) stationWidth = 160;
+          
+          // Add extra width for padding and border
+          stationWidth += 16; // 8px padding × 2 + 2px border × 2
+          
+          // Get timestamp if available
+          const messageTimestamp = station.userMessage?.created_at || station.assistantMessage?.created_at;
+          
+          flowNodes.push({
+            id: station.id,
+            type: 'stationNode',
+            position: { 
+              x: xPosition - (stationWidth / 2), // Center the station with accurate width
+              y: station.yPosition 
+            },
+            data: {
+              color,
+              branchId,
+              isActive,
+              userContent: station.userMessage?.message_text || '',
+              assistantContent: station.assistantMessage?.message_text || '',
+              timestamp: messageTimestamp,
+              calculatedWidth: stationWidth,
+              stationNumber: index + 1, // Add station number for reference
+              fullData: {
+                userMessage: station.userMessage,
+                assistantMessage: station.assistantMessage,
+              }
+            } as StationNodeData
+          });
+          
+          // Connect to previous node if exists
+          if (previousNodeId) {
+            // Determine source handle based on previous node type for perfect alignment
+            const sourceHandle = (() => {
+              if (previousNodeType === 'rootNode') return 'source-bottom';
+              if (previousNodeType === 'branchRootNode') return 'source-center';
+              if (previousNodeType === 'branchPointNode') return 'source-main';
+              return 'source-bottom'; // For station nodes, use consistent bottom handle
+            })();
+
+            flowEdges.push({
+              id: `edge-${previousNodeId}-${station.id}`,
+              source: previousNodeId,
+              target: station.id,
+              sourceHandle: sourceHandle,
+              targetHandle: 'target-top',
+              type: 'straight', // Straight vertical line
+              style: { 
+                stroke: color, 
+                strokeWidth: isMainBranch ? 4 : 3, // Thicker line for main branch
+                strokeLinecap: 'round',
+                opacity: isActive ? 1 : 0.85, // Slightly fade inactive branches
+                filter: isActive ? 'none' : 'saturate(0.9)' // Slightly desaturate inactive branches
+              }
+            });
+          }
+          
+          // Update previous node
+          previousNodeId = station.id;
+          previousNodeType = 'stationNode';
+        }
+      });
+    });
+    
+    return { nodes: flowNodes, edges: flowEdges };
+  }, [allNodes, branches, currentBranchId, layoutData, getBranchColor]);
 
   // Set up polling
   useEffect(() => {
-    if (!pollingInterval) return;
+    if (!pollingInterval || !projectId) return;
     
     const interval = setInterval(() => {
       // Only poll if we're possibly waiting for an AI response
@@ -507,10 +1324,10 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     }, pollingInterval);
 
     return () => clearInterval(interval);
-  }, [displayedNodes, pollingInterval]);
+  }, [displayedNodes, pollingInterval, projectId]);
 
   // The context value
-  const contextValue: ConversationContextValue = {
+  const contextValue = useMemo<ConversationContextValue>(() => ({
     // Data
     branches,
     allNodes,
@@ -533,13 +1350,39 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     createBranch,
     handleOptimisticUpdate,
     updateStreamingContent,
+    sendMessage,
+    updateMessageState,
     
     // Utility
     getBranchColor,
     getBranchName,
     getBranchPath,
     getNodesForReactFlow,
-  };
+  }), [
+    branches,
+    allNodes,
+    displayedNodes,
+    layoutData,
+    projectId,
+    currentBranchId,
+    loading,
+    optimisticMessages,
+    streamingMessageId,
+    streamingContent,
+    fetchData,
+    fetchLayoutData,
+    recalculateLayout,
+    switchBranch,
+    createBranch,
+    handleOptimisticUpdate,
+    updateStreamingContent,
+    sendMessage,
+    updateMessageState,
+    getBranchColor,
+    getBranchName,
+    getBranchPath,
+    getNodesForReactFlow
+  ]);
 
   return (
     <ConversationContext.Provider value={contextValue}>

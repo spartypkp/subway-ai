@@ -35,20 +35,30 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useConversation } from '@/lib/contexts/ConversationContext';
 
+/**
+ * MessageList Component
+ * 
+ * Displays conversation threads as a message list with branch visualization.
+ * Uses ConversationContext for data fetching, state management, and layout calculations.
+ */
 interface MessageListProps {
-  projectId: string;
-  branchId: string | null;
-  onBranchCreated: (newBranchId: string) => void;
-  onBranchSwitch?: (branchId: string) => void; // New prop for branch switching
-  onMessageSelect?: (messageId: string) => void; // For minimap integration
-  streamingContent?: string | null; // New prop to handle streaming content
-  onOptimisticUpdate?: (newMessages: TimelineNode[]) => void; // Expose the optimistic update handler
+  onBranchCreated?: (newBranchId: string) => void;
+  onBranchSwitch?: (branchId: string) => void;
+  onMessageSelect?: (messageId: string) => void;
 }
 
 // Define the ref type
 export interface MessageListRef {
-  handleOptimisticUpdate: (newMessages: TimelineNode[]) => void;
+  updateMessageState: (params: {
+    action: 'create' | 'update' | 'stream' | 'error';
+    userMessage?: string;
+    parentId?: string;
+    streamContent?: string;
+    messageId?: string;
+    errorMessage?: string;
+  }) => void;
 }
 
 interface BranchPointInfo {
@@ -63,23 +73,36 @@ interface BranchPointInfo {
 
 // Use forwardRef to create the component
 export const MessageList = forwardRef<MessageListRef, MessageListProps>(({ 
-  projectId, 
-  branchId, 
   onBranchCreated, 
   onBranchSwitch, 
-  onMessageSelect,
-  streamingContent,
-  onOptimisticUpdate
+  onMessageSelect
 }, ref) => {
-  const [allMessages, setAllMessages] = useState<TimelineNode[]>([]);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Get data and functions from ConversationContext
+  const {
+    projectId,
+    currentBranchId,
+    branches,
+    displayedNodes,
+    allNodes,
+    loading,
+    optimisticMessages,
+    streamingContent,
+    streamingMessageId,
+    fetchData,
+    switchBranch,
+    createBranch: contextCreateBranch,
+    getBranchColor,
+    getBranchName,
+    updateMessageState,
+    updateStreamingContent
+  } = useConversation();
+
+  // Local UI state
   const [activeMessage, setActiveMessage] = useState<string | null>(null);
   const [branchReason, setBranchReason] = useState('');
   const [branchDialogOpen, setBranchDialogOpen] = useState(false);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [creatingBranch, setCreatingBranch] = useState(false);
-  const [showLoadingIndicator, setShowLoadingIndicator] = useState(false);
   const [branchTransitions, setBranchTransitions] = useState<{id: string, fromBranch: string, toBranch: string}[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [scrollToBottomVisible, setScrollToBottomVisible] = useState(false);
@@ -87,380 +110,88 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
   const [branchPoints, setBranchPoints] = useState<BranchPointInfo[]>([]);
   const [availableBranches, setAvailableBranches] = useState<Branch[]>([]);
   
-  // New state for optimistic messages
-  const [optimisticMessages, setOptimisticMessages] = useState<TimelineNode[]>([]);
-  // New state for streaming AI response
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
-  
   // New state for subway track segments
   const [trackSegments, setTrackSegments] = useState<Array<{
     id: string;
     startY: number;
     endY: number;
     color: string;
-    branchId: string;
+    type: 'main' | 'branch' | 'highlight';
+    dashed?: boolean;
+    branch_id?: string;
   }>>([]);
-
-  // Add a transition flag state
-  const [isTransitioning, setIsTransitioning] = useState(false);
-
-  // Add this near the scrollToBottomVisible state
-  const [showBranchSwitchIndicator, setShowBranchSwitchIndicator] = useState(false);
-  const [switchTargetBranchName, setSwitchTargetBranchName] = useState<string | null>(null);
-
-  // Add an additional state to track branch switching specifically
-  const [isSwitchingBranch, setIsSwitchingBranch] = useState(false);
   
-  // Expose the handleOptimisticUpdate function through a ref
-  React.useImperativeHandle(ref, () => ({
-    handleOptimisticUpdate: (newMessages: TimelineNode[]) => {
-      console.log('Adding optimistic messages via ref:', newMessages);
-      
-      // Get the streaming message ID if any
-      const aiMessage = newMessages.find(m => m.type === 'assistant-message' && m.optimistic);
-      if (aiMessage) {
-        setStreamingMessageId(aiMessage.id);
-      }
-      
-      // Update optimistic messages - check if each message already exists
-      setOptimisticMessages(prev => {
-        // Create a new array to hold updated messages
-        const updated = [...prev];
-        
-        // Process each new message
-        for (const newMsg of newMessages) {
-          // Check if this message already exists in our array
-          const existingIndex = updated.findIndex(msg => msg.id === newMsg.id);
-          
-          if (existingIndex >= 0) {
-            // Update existing message
-            updated[existingIndex] = {
-              ...updated[existingIndex],
-              ...newMsg,
-              // Preserve the ID to ensure we update the right message
-              id: updated[existingIndex].id
-            };
-          } else {
-            // Add new message
-            updated.push(newMsg);
-          }
-        }
-        
-        return updated;
-      });
-      
-      // Immediately scroll to bottom for better UX
-      setTimeout(scrollToBottom, 100);
+  // Expose methods via ref - updated to use the updateMessageState method
+  useImperativeHandle(ref, () => ({
+    // Delegate to the context's updateMessageState
+    updateMessageState: (params) => {
+      updateMessageState(params);
     }
   }));
 
-  // Build a path from root to the current branch node
-  const buildMessagePath = (messages: TimelineNode[], branches: Branch[], targetBranchId: string | null): TimelineNode[] => {
-    if (!messages.length) return [];
-
-    // If no specific branch is selected, show messages from the main branch
-    if (!targetBranchId) {
-      // Find the root node
-      const rootNode = messages.find(m => m.type === 'root');
-      if (!rootNode) return [];
-      
-      const mainBranchId = rootNode.branch_id;
-      return messages
-        .filter(m => m.branch_id === mainBranchId)
-        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    }
-    
-    // If a specific branch is selected, build the full path from root to the current branch
-    const result: TimelineNode[] = [];
-    const branchTransitionsMap: {[id: string]: {fromBranch: string, toBranch: string}} = {};
-    
-    // First, find all nodes in the target branch
-    const branchMessages = messages
-      .filter(m => m.branch_id === targetBranchId)
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    
-    if (!branchMessages.length) return [];
-    
-    // Find the branch in our branches list
-    const currentBranch = branches.find(b => b.id === targetBranchId);
-    if (!currentBranch) return branchMessages;
-    
-    // If this branch has a parent branch, we need to include messages from the parent branch
-    if (currentBranch.parent_branch_id) {
-      // Find the branch point node
-      const branchPointNode = messages.find(m => m.id === currentBranch.branch_point_node_id);
-      
-      if (branchPointNode) {
-        branchTransitionsMap[branchPointNode.id] = {
-          fromBranch: currentBranch.parent_branch_id,
-          toBranch: targetBranchId
-        };
-        
-        // Recursively build the parent branch path up to the branch point
-        const parentPath = buildMessagePath(messages, branches, currentBranch.parent_branch_id);
-        
-        // Only include parent messages up to the branch point
-        const branchPointIndex = parentPath.findIndex(m => m.id === branchPointNode.id);
-        if (branchPointIndex !== -1) {
-          result.push(...parentPath.slice(0, branchPointIndex + 1));
-        }
-      }
-    }
-    
-    // Add the branch messages to the result, excluding the branch-root node
-    // Find the first user message in the branch to ensure it's shown first
-    const nonBranchRootMessages = branchMessages.filter(m => m.type !== 'branch-root');
-    
-    // Sort messages to ensure correct order after branch switch
-    const sortedMessages = nonBranchRootMessages.sort((a, b) => 
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
-    
-    result.push(...sortedMessages);
-    
-    // Process branch transitions
-    const transitions = Object.entries(branchTransitionsMap).map(([id, { fromBranch, toBranch }]) => ({
-      id,
-      fromBranch,
-      toBranch
-    }));
-    
-    setBranchTransitions(transitions);
-    
-    return result;
-  };
-
-  // Get messages to display based on the current branch
-  const displayedMessages = React.useMemo(() => {
-    // Combine real and optimistic messages
-    let combined = [...allMessages];
-    
-    if (optimisticMessages.length > 0) {
-      // Process optimistic messages one by one to avoid duplicates
-      for (const optMsg of optimisticMessages) {
-        // Check if this optimistic message is already represented in allMessages
-        const existsInAll = allMessages.some(m => 
-          // Either exact ID match
-          m.id === optMsg.id ||
-          // Or same content and type in the same branch
-          (m.message_text === optMsg.message_text && 
-           m.type === optMsg.type && 
-           m.branch_id === optMsg.branch_id) ||
-          // Or AI message with the same parent (to catch when content differs but it's the same logical message)
-          (optMsg.type === 'assistant-message' && m.type === 'assistant-message' && 
-           optMsg.parent_id === m.parent_id)
-        );
-        
-        // Only add if it doesn't exist in regular messages
-        if (!existsInAll) {
-          combined.push(optMsg);
-        }
-      }
-    }
-    
-    // Apply message path building with combined messages
-    return buildMessagePath(combined, branches, branchId);
-  }, [allMessages, optimisticMessages, branches, branchId]);
-
-  // Find and track all branch points in the conversation
+  // Set up initial data fetching from context
   useEffect(() => {
-    if (!allMessages.length || !branches.length) return;
+    // Initial data fetch if needed
+    if (projectId && (!displayedNodes.length || displayedNodes.length === 0)) {
+      fetchData();
+    }
+  }, [projectId, displayedNodes.length, fetchData]);
+
+  // Add branch point info - this still needs context data but has UI-specific logic
+  useEffect(() => {
+    // Skip if we don't have data yet
+    if (!branches.length || !allNodes.length) return;
     
-    // Find branches that have been created from messages in the current branch path
-    const branchPointsInfo: BranchPointInfo[] = [];
+    // Find all branch points
+    const points: BranchPointInfo[] = [];
     
     branches.forEach(branch => {
       if (branch.parent_branch_id && branch.branch_point_node_id) {
+        // Find parent branch
+        const parentBranch = branches.find(b => b.id === branch.parent_branch_id);
+        if (!parentBranch) return;
+        
         // Find the branch point message
-        const branchPointMessage = allMessages.find(m => m.id === branch.branch_point_node_id);
+        const branchPointMessage = allNodes.find(m => m.id === branch.branch_point_node_id);
         if (!branchPointMessage) return;
         
-        // Get parent and child branch colors
-        const parentBranchColor = getBranchColor(branch.parent_branch_id);
-        const childBranchColor = getBranchColor(branch.id);
-        
-        branchPointsInfo.push({
+        points.push({
           parentBranchId: branch.parent_branch_id,
           childBranchId: branch.id,
           childBranchName: branch.name,
           messageId: branch.branch_point_node_id,
           position: branchPointMessage.position,
-          parentBranchColor,
-          childBranchColor
+          parentBranchColor: getBranchColor(branch.parent_branch_id),
+          childBranchColor: getBranchColor(branch.id)
         });
       }
     });
     
-    setBranchPoints(branchPointsInfo);
+    setBranchPoints(points);
     
-    // Also track available branches from the current branch path
-    if (branchId) {
-      // Find all branches that stem from the current branch
-      const childBranches = branches.filter(b => b.parent_branch_id === branchId);
-      setAvailableBranches(childBranches);
-    } else {
-      // If we're on the main branch, find all top-level branches
-      const mainBranch = branches.find(b => b.depth === 0);
-      if (mainBranch) {
-        const childBranches = branches.filter(b => b.parent_branch_id === mainBranch.id);
-        setAvailableBranches(childBranches);
-      }
-    }
-  }, [allMessages, branches, branchId]);
-
-  // Function to fetch messages - modified to handle optimistic updates
-  const fetchMessages = async () => {
-    console.log('Fetching messages for project:', projectId, 'branch:', branchId || 'main');
-    setLoading(allMessages.length === 0); // Only show loading for initial load
-    try {
-      // Fetch all branches for the project
-      const branchesResponse = await fetch(`/api/projects/${projectId}/branches`);
-      if (!branchesResponse.ok) {
-        throw new Error(`Failed to fetch branches: ${branchesResponse.status}`);
-      }
-      const branchesData = await branchesResponse.json();
-      setBranches(branchesData);
-      
-      // Always fetch the complete tree to get all messages, including branch paths
-      const url = `/api/nodes?project_id=${projectId}&complete_tree=true`;
-      
-      console.log('Fetching from:', url);
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        throw new Error(`API request failed with status ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log(`Received ${data.length} messages`);
-      
-      // Store all messages
-      setAllMessages(data);
-      
-      // If we have successfully fetched messages, clear optimistic messages
-      // that are no longer needed (their real versions are in the data)
-      if (optimisticMessages.length > 0) {
-        // Use a more robust way to check if real messages have arrived
-        // that match our optimistic ones
-        setTimeout(() => {
-          console.log('Cleaning up optimistic messages. Before:', optimisticMessages.length);
-          
-          const updatedOptimisticMessages = optimisticMessages.filter(optMsg => {
-            // For user messages, check if a real message with same content exists
-            if (optMsg.type === 'user-message') {
-              const shouldKeep = !data.some((realMsg: TimelineNode) => 
-                realMsg.type === 'user-message' && 
-                (realMsg.message_text === optMsg.message_text || realMsg.id === optMsg.id)
-              );
-              return shouldKeep;
-            }
-            
-            // For AI messages, we need to be careful as real content might be different
-            // Keep them if they are still marked as streaming
-            if (optMsg.type === 'assistant-message') {
-              // If this message is still marked as loading, keep it
-              if (optMsg.isLoading) return true;
-              
-              // If streaming isn't done yet, keep it
-              if (optMsg.id === streamingMessageId && streamingContent !== null) return true;
-              
-              // Check if a real message with similar content exists
-              const shouldKeep = !data.some((realMsg: TimelineNode) => 
-                realMsg.type === 'assistant-message' &&
-                (realMsg.parent_id === optMsg.parent_id || realMsg.id === optMsg.id)
-              );
-              return shouldKeep;
-            }
-            
-            return true;
-          });
-          
-          console.log('Cleaning up optimistic messages. After:', updatedOptimisticMessages.length);
-          setOptimisticMessages(updatedOptimisticMessages);
-        }, 100);
-      }
-      
-      
-      // Hide loading indicator
-      setShowLoadingIndicator(false);
-    } catch (error) {
-      console.error('Failed to fetch messages:', error);
-    } finally {
-      setLoading(false);
-    }
-    return true; // Return a resolved promise value
-  };
-
-  // Fetch messages when project or branch changes
-  useEffect(() => {
-    fetchMessages();
-  }, [projectId, branchId]);
-
-  // Set up polling for updates (every 3 seconds when expecting a response)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Only poll if we're possibly waiting for an AI response
-      const lastMessage = displayedMessages[displayedMessages.length - 1];
-      if (lastMessage && (lastMessage.type === 'user-message' || (lastMessage.optimistic && lastMessage.isLoading))) {
-        setShowLoadingIndicator(true);
-        fetchMessages();
-      }
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [displayedMessages]);
-
-  // Update optimistic AI message content when streamingContent changes
-  useEffect(() => {
-    if (streamingContent !== undefined && streamingContent !== null && streamingMessageId) {
-      setOptimisticMessages(prev => 
-        prev.map(msg => 
-          msg.id === streamingMessageId
-            ? { ...msg, message_text: streamingContent, isLoading: false }
-            : msg
-        )
+    // Calculate branch transitions for UI
+    const transitions: {id: string, fromBranch: string, toBranch: string}[] = [];
+    
+    points.forEach(point => {
+      transitions.push({
+        id: point.messageId,
+        fromBranch: point.parentBranchId,
+        toBranch: point.childBranchId
+      });
+    });
+    
+    setBranchTransitions(transitions);
+    
+    // Find available branches for the current branch
+    if (currentBranchId) {
+      const availableBranches = branches.filter(branch => 
+        branch.parent_branch_id === currentBranchId ||
+        (branch.id === currentBranchId && branch.parent_branch_id)
       );
-    } else if (streamingContent === null && streamingMessageId) {
-      // Reset streamingMessageId when streaming ends (streamingContent is null)
-      setStreamingMessageId(null);
-    }
-  }, [streamingContent, streamingMessageId]);
-
-  // Handle scroll events to show/hide scroll to bottom button
-  useEffect(() => {
-    const handleScroll = () => {
-      if (!scrollContainerRef.current) return;
       
-      const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-      const isBottomVisible = scrollHeight - scrollTop - clientHeight < 100;
-      setScrollToBottomVisible(!isBottomVisible && scrollHeight > clientHeight + 300);
-    };
-    
-    const scrollContainer = scrollContainerRef.current;
-    if (scrollContainer) {
-      scrollContainer.addEventListener('scroll', handleScroll);
-      return () => scrollContainer.removeEventListener('scroll', handleScroll);
+      setAvailableBranches(availableBranches);
     }
-  }, []);
-
-  // Scroll to bottom when new messages arrive or when explicitly requested
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    if (!loading && displayedMessages.length > 0) {
-      // Only auto-scroll if we're already near the bottom
-      if (scrollContainerRef.current) {
-        const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-        const isBottomVisible = scrollHeight - scrollTop - clientHeight < 200;
-        
-        if (isBottomVisible) {
-          scrollToBottom();
-        }
-      }
-    }
-  }, [displayedMessages, loading]);
+  }, [branches, allNodes, currentBranchId, getBranchColor]);
 
   // Format message text with markdown-like formatting - enhanced to handle streaming state
   const formatMessageText = (text: string, isStreaming?: boolean): string => {
@@ -501,40 +232,6 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
              transition.id === prevMessage.id);
   };
 
-  // Get branch color based on branch ID or from branch data
-  const getBranchColor = (branchId: string): string => {
-    // First check if we have this branch in our branches list
-    const branch = branches.find(b => b.id === branchId);
-    if (branch && branch.color) {
-      return branch.color;
-    }
-    
-    // Fallback colors if branch not found or has no color
-    const colors = [
-      '#3b82f6', // blue-500 (main line)
-      '#ef4444', // red-500
-      '#10b981', // emerald-500
-      '#f59e0b', // amber-500
-      '#8b5cf6', // violet-500
-      '#ec4899', // pink-500
-      '#06b6d4', // cyan-500
-      '#84cc16', // lime-500
-    ];
-    
-    // Simple hash of branchId to pick a color
-    const hash = branchId.split('').reduce((acc, char) => {
-      return acc + char.charCodeAt(0);
-    }, 0);
-    
-    return colors[hash % colors.length];
-  };
-
-  // Get branch name from branchId
-  const getBranchName = (branchId: string): string => {
-    const branch = branches.find(b => b.id === branchId);
-    return branch?.name || 'Unnamed Branch';
-  };
-
   // Get message station number (position in the conversation)
   const getStationNumber = (message: TimelineNode, index: number, messages: TimelineNode[]): number => {
     // Count only user and assistant messages
@@ -550,7 +247,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
         {trackSegments.map(segment => (
           <div 
             key={segment.id}
-            className={`absolute w-2.5 rounded-full ${isTransitioning ? 'transition-all duration-500' : ''}`}
+            className={`absolute w-2.5 rounded-full ${segment.type === 'highlight' ? 'transition-all duration-500' : ''}`}
             style={{
               background: segment.color,
               boxShadow: `0 0 10px ${segment.color}40`,
@@ -563,9 +260,46 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
     );
   };
 
+  // Handle scroll events to show/hide scroll to bottom button
+  useEffect(() => {
+    const handleScroll = () => {
+      if (!scrollContainerRef.current) return;
+      
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+      const isBottomVisible = scrollHeight - scrollTop - clientHeight < 100;
+      setScrollToBottomVisible(!isBottomVisible && scrollHeight > clientHeight + 300);
+    };
+    
+    const scrollContainer = scrollContainerRef.current;
+    if (scrollContainer) {
+      scrollContainer.addEventListener('scroll', handleScroll);
+      return () => scrollContainer.removeEventListener('scroll', handleScroll);
+    }
+  }, []);
+
+  // Scroll to bottom when new messages arrive or when explicitly requested
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  // Auto-scroll when new messages arrive if already near the bottom
+  useEffect(() => {
+    if (!loading.data && displayedNodes.length > 0) {
+      // Only auto-scroll if we're already near the bottom
+      if (scrollContainerRef.current) {
+        const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+        const isBottomVisible = scrollHeight - scrollTop - clientHeight < 200;
+        
+        if (isBottomVisible) {
+          scrollToBottom();
+        }
+      }
+    }
+  }, [displayedNodes, loading.data]);
+
   // Update the useLayoutEffect to ensure better segment connections, especially after branch points
   useLayoutEffect(() => {
-    if (!scrollContainerRef.current || displayedMessages.length === 0) return;
+    if (!scrollContainerRef.current || displayedNodes.length === 0) return;
     
     const container = scrollContainerRef.current;
     const newSegments = [];
@@ -603,7 +337,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
       const rootBottom = rootRect.bottom - containerTop + containerScroll;
       
       // Find the root/main branch for consistent coloring
-      const rootNode = allMessages.find(m => m.type === 'root');
+      const rootNode = allNodes.find(m => m.type === 'root');
       const mainBranchId = rootNode?.branch_id || '';
       const mainBranchColor = getBranchColor(mainBranchId);
       
@@ -613,7 +347,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
         startY: 0,
         endY: rootBottom,
         color: mainBranchColor, // Always use the main branch color for the first segment
-        branchId: mainBranchId || 'main'
+        type: 'main',
+        branch_id: mainBranchId || 'main'
       });
       
       lastY = rootBottom;
@@ -641,9 +376,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
       if (processedMessageIds.has(messageId) && !messageId.startsWith('transition-')) continue;
       processedMessageIds.add(messageId);
       
-      const message = displayedMessages.find(m => m.id === messageId) || 
+      const message = displayedNodes.find(m => m.id === messageId) || 
                     (messageId.startsWith('transition-') ? 
-                      displayedMessages.find(m => m.id === messageId.replace('transition-', '')) : 
+                      displayedNodes.find(m => m.id === messageId.replace('transition-', '')) : 
                       undefined);
       
       if (!message) continue;
@@ -662,7 +397,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
           startY: lastY,
           endY: elementMidpoint,
           color: color,
-          branchId: message.branch_id
+          type: 'branch',
+          branch_id: message.branch_id
         });
       }
       
@@ -678,9 +414,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
           if (nextTop > elementBottom) {
             const nextMessageId = nextElement.getAttribute('data-id');
             const nextMessage = nextMessageId ? 
-              displayedMessages.find(m => m.id === nextMessageId) || 
+              displayedNodes.find(m => m.id === nextMessageId) || 
               (nextMessageId.startsWith('transition-') ? 
-                displayedMessages.find(m => m.id === nextMessageId.replace('transition-', '')) : 
+                displayedNodes.find(m => m.id === nextMessageId.replace('transition-', '')) : 
                 undefined) : 
               undefined;
             
@@ -692,7 +428,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
               startY: elementBottom,
               endY: nextTop,
               color: connectingColor,
-              branchId: nextMessage?.branch_id || message.branch_id
+              type: 'branch',
+              branch_id: nextMessage?.branch_id || message.branch_id
             });
           }
         }
@@ -705,7 +442,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
     // Add final segment to bottom if needed, but only if we have real messages
     // and only extend it to a reasonable distance below the last message
     if (lastY > 0 && hasRealMessages) {
-      const lastMessage = displayedMessages[displayedMessages.length - 1];
+      const lastMessage = displayedNodes[displayedNodes.length - 1];
       const extendHeight = Math.min(
         container.scrollHeight - lastY, // Don't go beyond container
         100 // Maximum extension of 100px below last message
@@ -717,27 +454,48 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
           startY: lastY,
           endY: lastY + extendHeight,
           color: lastMessage ? getBranchColor(lastMessage.branch_id) : '#3b82f6',
-          branchId: lastMessage ? lastMessage.branch_id : 'main'
+          type: 'branch',
+          branch_id: lastMessage ? lastMessage.branch_id : 'main'
         });
       }
     }
     
-    setTrackSegments(newSegments);
-  }, [displayedMessages, branchId, loading, showLoadingIndicator, isTransitioning]);
+    // Cast the newSegments array to the correct type to fix the linter error
+    setTrackSegments(newSegments as Array<{
+      id: string;
+      startY: number;
+      endY: number;
+      color: string;
+      type: 'main' | 'branch' | 'highlight';
+      dashed?: boolean;
+      branch_id?: string;
+    }>);
+  }, [displayedNodes, currentBranchId, loading, optimisticMessages.length === 0]);
 
-  if (loading && allMessages.length === 0) {
+  // Determine if we're viewing a branch that has a parent we can switch back to
+  const getCurrentBranchParent = (): Branch | undefined => {
+    if (!currentBranchId) return undefined;
+    
+    const currentBranch = branches.find(b => b.id === currentBranchId);
+    if (currentBranch?.parent_branch_id) {
+      return branches.find(b => b.id === currentBranch.parent_branch_id);
+    }
+    return undefined;
+  };
+
+  // Loading state - use loading.data from context
+  if (loading.data && allNodes.length === 0) {
     return (
       <div className="flex justify-center py-8">
-        <div className="animate-pulse flex flex-col gap-4 w-full max-w-xl">
-          <div className="bg-muted/60 rounded-lg p-4 w-3/4 h-16"></div>
-          <div className="bg-muted/60 rounded-lg p-4 ml-auto w-3/4 h-16"></div>
-          <div className="bg-muted/60 rounded-lg p-4 w-3/4 h-16"></div>
+        <div className="inline-flex items-center rounded-full bg-primary-foreground px-4 py-2 text-sm font-medium shadow-sm">
+          <div className="mr-2 size-4 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
+          Loading conversation...
         </div>
       </div>
     );
   }
 
-  if (allMessages.length === 0) {
+  if (allNodes.length === 0) {
     // Clear any track segments when there are no messages
     if (trackSegments.length > 0) {
       setTrackSegments([]);
@@ -752,86 +510,42 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
     );
   }
 
+  // Handle selection of a message (for minimap integration)
+  const handleMessageSelect = (messageId: string) => {
+    if (onMessageSelect) {
+      onMessageSelect(messageId);
+    }
+  };
+
+  // Handle branch creation from a message
   const handleBranchClick = (messageId: string) => {
-    console.log('Branch button clicked for message:', messageId);
     setSelectedMessageId(messageId);
     setBranchDialogOpen(true);
   };
 
-  // Find if a message is a branch point with child branches
-  const getBranchPointInfo = (messageId: string): BranchPointInfo | undefined => {
-    return branchPoints.find(bp => bp.messageId === messageId);
-  };
-
-  // Determine if we're viewing a branch that has a parent we can switch back to
-  const getCurrentBranchParent = (): Branch | undefined => {
-    if (!branchId) return undefined;
-    
-    const currentBranch = branches.find(b => b.id === branchId);
-    if (currentBranch?.parent_branch_id) {
-      return branches.find(b => b.id === currentBranch.parent_branch_id);
-    }
-    return undefined;
-  };
-
-  // Enhanced branch switching function
-  const handleSwitchBranch = (targetBranchId: string | undefined) => {
-    console.log('Switching to branch:', targetBranchId);
-    
-    if (onBranchSwitch && targetBranchId) {
-      // Prevent switching to the same branch
-      if (targetBranchId === branchId) {
-        console.log('Already on branch:', targetBranchId);
-        return;
-      }
-      
-      // Before switching, update the UI to show a transitioning state
-      setIsTransitioning(true);
-      setIsSwitchingBranch(true); // Set the specific branch switching state
-      
-      // Call the parent component's onBranchSwitch function
-      onBranchSwitch(targetBranchId);
-      
-      // Schedule a refresh of messages after switching
-      setTimeout(() => {
-        fetchMessages().then(() => {
-          // Reset transition state after a short delay
-          setTimeout(() => {
-            setIsTransitioning(false);
-            setIsSwitchingBranch(false); // Reset branch switching state
-          }, 300);
-        });
-      }, 100);
-    }
-  };
-
+  // Create a new branch based on the selected message
   const createBranch = async () => {
-    if (!selectedMessageId) return;
-    
     setCreatingBranch(true);
+    
     try {
-      // Find the message and its branch
-      const message = allMessages.find(m => m.id === selectedMessageId);
-      if (!message) throw new Error('Selected message not found');
-      
-      const response = await fetch('/api/branches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project_id: projectId,
-          parent_branch_id: message.branch_id,
-          branch_point_node_id: selectedMessageId,
-          name: branchReason || undefined,
-          created_by: 'user' // You might want to get this from auth context
-        })
+      // Use the context's createBranch function instead of direct API calls
+      const newBranchId = await contextCreateBranch({
+        branchPointNodeId: selectedMessageId as string,
+        name: branchReason || undefined,
+        createdBy: 'user'
       });
       
-      if (!response.ok) throw new Error('Failed to create branch');
+      console.log('Branch created with ID:', newBranchId);
       
-      const result = await response.json();
-      onBranchCreated(result.id);
+      // Call the callback if provided
+      onBranchCreated && onBranchCreated(newBranchId);
+      
+      // Reset dialog state
       setBranchDialogOpen(false);
       setBranchReason('');
+      
+      // Switch to the new branch
+      switchBranch(newBranchId);
     } catch (error) {
       console.error('Failed to create branch:', error);
     } finally {
@@ -839,43 +553,28 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
     }
   };
 
-  const handleMessageSelect = (messageId: string) => {
-    if (onMessageSelect) {
-      onMessageSelect(messageId);
-    }
+  // Get branch point info for a specific message
+  const getBranchPointInfo = (messageId: string): BranchPointInfo | undefined => {
+    return branchPoints.find(bp => bp.messageId === messageId);
   };
 
-  // Add a function to determine which branch to switch to at a branch point
+  // Determine the target branch for switching based on current branch
   const getBranchSwitchTarget = (branchPointInfo: BranchPointInfo, currentBranchId: string | null): { branchId: string, branchName: string | null, branchColor: string } => {
-    // If we're currently on the parent branch, switch to the child branch
-    if (!currentBranchId || currentBranchId === branchPointInfo.parentBranchId) {
-      return {
-        branchId: branchPointInfo.childBranchId,
-        branchName: branchPointInfo.childBranchName,
-        branchColor: branchPointInfo.childBranchColor
-      };
-    }
-    // If we're on the child branch, switch back to the parent branch
-    else if (currentBranchId === branchPointInfo.childBranchId) {
+    // If we're on the child branch, switch to parent
+    if (currentBranchId === branchPointInfo.childBranchId) {
       return {
         branchId: branchPointInfo.parentBranchId,
         branchName: getBranchName(branchPointInfo.parentBranchId),
         branchColor: branchPointInfo.parentBranchColor
       };
     }
-    // Default case
+    
+    // Otherwise, switch to child branch
     return {
       branchId: branchPointInfo.childBranchId,
       branchName: branchPointInfo.childBranchName,
       branchColor: branchPointInfo.childBranchColor
     };
-  };
-
-  // Pass the optimistic update handler to the ChatControls component via App's onMessageSubmit
-  const handleMessageSubmit = () => {
-    // This function should be passed to ChatControls
-    // It will be called after a message is submitted
-    fetchMessages();
   };
 
   return (
@@ -887,29 +586,19 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
         {/* Render unified subway track */}
         {renderSubwayTrack()}
         
-        {/* Loading overlay for branch switching */}
-        {isSwitchingBranch && (
-          <div className="absolute inset-0 bg-background/30 backdrop-blur-[1px] z-30 flex items-center justify-center pointer-events-none">
-            <div className="rounded-lg bg-background/80 border shadow-md px-4 py-3 flex items-center gap-2">
-              <GitBranch className="h-4 w-4 text-primary animate-pulse" />
-              <span className="text-sm font-medium">Switching branch...</span>
-            </div>
-          </div>
-        )}
-        
         {/* Current branch indicator */}
-        {branchId && (
+        {currentBranchId && (
           <div className="fixed top-4 left-4 z-50">
             <div 
               className="px-3 py-1.5 text-xs font-medium rounded-full border shadow-md flex items-center gap-2 bg-white/90 backdrop-blur-sm"
-              style={{ borderColor: `${getBranchColor(branchId)}40` }}
+              style={{ borderColor: `${getBranchColor(currentBranchId)}40` }}
             >
               <div 
                 className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: getBranchColor(branchId) }}
+                style={{ backgroundColor: getBranchColor(currentBranchId) }}
               />
-              <span style={{ color: getBranchColor(branchId) }}>
-                {getBranchName(branchId)}
+              <span style={{ color: getBranchColor(currentBranchId) }}>
+                {getBranchName(currentBranchId)}
               </span>
             </div>
           </div>
@@ -922,7 +611,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
               variant="outline"
               size="sm"
               className="text-xs px-3 py-1 h-auto flex items-center gap-1.5 border shadow-md bg-white/90 backdrop-blur-sm"
-              onClick={() => handleSwitchBranch(getCurrentBranchParent()!.id)}
+              onClick={() => switchBranch(getCurrentBranchParent()!.id)}
               style={{ 
                 borderColor: `${getBranchColor(getCurrentBranchParent()!.id)}40`,
                 color: getBranchColor(getCurrentBranchParent()!.id)
@@ -935,22 +624,22 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
         )}
         
         {/* Project root indicator */}
-        {displayedMessages.length > 0 && (
+        {displayedNodes.length > 0 && (
           <div className="relative flex justify-center py-8 mb-2" data-node="project-root">
             <div 
               className="size-14 rounded-full flex items-center justify-center border-3 shadow-md bg-background z-10 relative"
-              style={{ borderColor: getBranchColor(displayedMessages[0]?.branch_id || '') }}
+              style={{ borderColor: getBranchColor(displayedNodes[0]?.branch_id || '') }}
             >
               <Train
                 className="size-7"
-                style={{ color: getBranchColor(displayedMessages[0]?.branch_id || '') }}
+                style={{ color: getBranchColor(displayedNodes[0]?.branch_id || '') }}
               />
             </div>
             
           </div>
         )}
         
-        {displayedMessages
+        {displayedNodes
           .map((message, index) => {
             // Skip root nodes as they're not visible messages
             if (message.type === 'root' || message.type === 'branch-root') {
@@ -958,9 +647,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
             }
 
             // Display branch transition indicator
-            const isBranchChange = isBranchTransition(message, index, displayedMessages);
+            const isBranchChange = isBranchTransition(message, index, displayedNodes);
             if (isBranchChange) {
-              const prevBranchId = displayedMessages[index - 1].branch_id;
+              const prevBranchId = displayedNodes[index - 1].branch_id;
               const currentBranchId = message.branch_id;
               const prevBranchColor = getBranchColor(prevBranchId);
               const currentBranchColor = getBranchColor(currentBranchId);
@@ -1021,14 +710,18 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
             
             if (message.type === 'user-message' || message.type === 'assistant-message') {
               const isUser = message.type === 'user-message';
-              const messageText = message.message_text || '';
-              const stationNumber = getStationNumber(message, index, displayedMessages);
+              // Use streaming content from context if this is the streaming message
+              const messageText = message.id === streamingMessageId && streamingContent !== null 
+                ? streamingContent 
+                : message.message_text || '';
+              const stationNumber = getStationNumber(message, index, displayedNodes);
               const branchColor = getBranchColor(message.branch_id);
               
-              // Check if this is an optimistic message currently streaming
+              // Check if this is an optimistic message or currently streaming
               const isOptimistic = Boolean(message.optimistic);
-              const isStreaming = isOptimistic && message.type === 'assistant-message' && 
-                                 message.id === streamingMessageId;
+              const isStreaming = message.id === streamingMessageId && streamingContent !== null;
+              const isLoading = isOptimistic && message.isLoading;
+              const showTypingIndicator = isStreaming || isLoading;
                 
                 return (
                   <div 
@@ -1046,6 +739,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
                     data-branch={message.branch_id}
                     data-type={message.type}
                     data-optimistic={isOptimistic ? 'true' : 'false'}
+                    data-streaming={isStreaming ? 'true' : 'false'}
                   >
                   {/* Branch line extending to the side if this is a branch point */}
                   {hasBranchOptions && !isUser && (
@@ -1053,12 +747,12 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
                       <div className="relative">
                         {/* Get the correct branch target based on current branch */}
                         {(() => {
-                          const switchTarget = getBranchSwitchTarget(branchPointInfo, branchId);
+                          const switchTarget = getBranchSwitchTarget(branchPointInfo, currentBranchId);
                           return (
                             <>
                               {/* Horizontal branch line with transition */}
                               <div 
-                                className={`absolute h-3 ${isTransitioning ? 'transition-colors duration-500' : ''}`}
+                                className={`absolute h-3 ${isBranchChange ? 'transition-colors duration-500' : ''}`}
                                 style={{ 
                                   background: switchTarget.branchColor,
                                   borderTopRightRadius: '4px',
@@ -1077,7 +771,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
                                   className="h-9 text-xs bg-white shadow-md border-2 px-4 flex items-center gap-2 font-medium"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleSwitchBranch(switchTarget.branchId);
+                                    switchBranch(switchTarget.branchId);
                                   }}
                                   style={{ 
                                     color: switchTarget.branchColor,
@@ -1170,7 +864,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
                         dangerouslySetInnerHTML={{ 
                           __html: formatMessageText(
                             messageText, 
-                            isStreaming || (isOptimistic && message.isLoading)
+                            showTypingIndicator
                           ) 
                         }}
                       />
@@ -1182,7 +876,10 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
                           <div className="flex items-center gap-1">
                             <Sparkles className="h-3 w-3" />
                             <span>AI Assistant</span>
-                            {isOptimistic && message.isLoading && (
+                            {isStreaming && (
+                              <span className="ml-2 text-primary animate-pulse">generating...</span>
+                            )}
+                            {isLoading && !isStreaming && (
                               <span className="ml-2 text-primary animate-pulse">thinking...</span>
                             )}
                           </div>
@@ -1226,14 +923,14 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
               const childBranchColor = childBranch ? getBranchColor(childBranch.id) : branchColor;
               
               // Find the parent message (which should be an assistant message)
-              const parentMessage = displayedMessages.find(m => m.id === message.parent_id);
+              const parentMessage = displayedNodes.find(m => m.id === message.parent_id);
               const isAssistantParent = parentMessage?.type === 'assistant-message';
               
               // Check if this is the last message
-              const isLastMessage = index === displayedMessages.length - 1;
+              const isLastMessage = index === displayedNodes.length - 1;
               
               // Find the next message to determine the color for the vertical connector
-              const nextMessage = index < displayedMessages.length - 1 ? displayedMessages[index + 1] : null;
+              const nextMessage = index < displayedNodes.length - 1 ? displayedNodes[index + 1] : null;
               const nextColor = nextMessage ? getBranchColor(nextMessage.branch_id) : branchColor;
               
               return (
@@ -1279,7 +976,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
                         <div className="relative">
                           {(() => {
                             // Determine if we're on the child branch or parent branch
-                            const isOnChildBranch = branchId === childBranch.id;
+                            const isOnChildBranch = currentBranchId === childBranch.id;
                             const targetBranchId = isOnChildBranch ? message.branch_id : childBranch.id;
                             const targetBranchName = getBranchName(targetBranchId);
                             const lineColor = isOnChildBranch ? branchColor : childBranchColor;
@@ -1306,7 +1003,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
                                     className="h-9 text-xs bg-white shadow-md border-2 px-4 flex items-center gap-2 font-medium"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleSwitchBranch(targetBranchId);
+                                      switchBranch(targetBranchId);
                                     }}
                                     style={{ 
                                       color: lineColor,
@@ -1332,7 +1029,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
           })}
         
         {/* Loading indicator for new messages */}
-        {showLoadingIndicator && optimisticMessages.length === 0 && (
+        {optimisticMessages.length === 0 && (
           <div 
             className="flex justify-center py-4 z-10"
             data-node="loading-indicator"
@@ -1344,7 +1041,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
                 <div className="bg-primary rounded-full h-2 w-2 animate-pulse" style={{ animationDelay: '400ms' }}></div>
               </div>
               <span className="text-xs text-muted-foreground animate-pulse">
-                AI is thinking...
+                {loading.data ? 'Loading conversation...' : 'AI is thinking...'}
               </span>
             </div>
           </div>
@@ -1357,7 +1054,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
       {scrollToBottomVisible && (
         <Button
           className="fixed bottom-24 right-4 size-10 p-0 rounded-full shadow-md z-10 bg-primary/90 text-primary-foreground animate-fadeIn"
-          onClick={scrollToBottom}
+          onClick={() => {
+            scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: 'smooth' });
+          }}
         >
           <CornerDownRight className="size-5" />
         </Button>
@@ -1393,8 +1092,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
               disabled={creatingBranch}
               className="gap-1"
               style={{ 
-                backgroundColor: branchId ? getBranchColor(branchId) : undefined,
-                borderColor: branchId ? getBranchColor(branchId) : undefined 
+                backgroundColor: currentBranchId ? getBranchColor(currentBranchId) : undefined,
+                borderColor: currentBranchId ? getBranchColor(currentBranchId) : undefined 
               }}
             >
               {creatingBranch ? (
