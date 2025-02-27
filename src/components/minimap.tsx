@@ -473,9 +473,6 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
   const [error, setError] = useState<string | null>(null);
   const reactFlowInstance = useReactFlow();
   const [layoutData, setLayoutData] = useState<Record<string, BranchLayout> | null>(null);
-  // Add state to track failed recalculation attempts
-  const [recalculationAttempts, setRecalculationAttempts] = useState(0);
-  const [failedBranchIds, setFailedBranchIds] = useState<Set<string>>(new Set());
   
   // State to track if we're showing the branch labels
   const [showBranchLabels, setShowBranchLabels] = useState(false);
@@ -1001,17 +998,10 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
   // Fetch layout data for branch positions
   const fetchLayoutData = useCallback(async () => {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-      
-      const response = await fetch(`/api/projects/${projectId}/layout`, {
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
+      const response = await fetch(`/api/projects/${projectId}/layout`);
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch layout data: ${response.status}`);
+        throw new Error('Failed to fetch layout data');
       }
       
       const layoutInfo = await response.json();
@@ -1028,7 +1018,6 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       return layoutMap;
     } catch (error) {
       console.error('Error fetching layout data:', error);
-      // Don't set error state here to avoid re-renders
       return null;
     }
   }, [projectId]);
@@ -1133,37 +1122,19 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       // Only auto-recalculate if:
       // 1. We have nodes loaded
       // 2. We don't have layout data for some branches
-      // 3. We haven't exceeded max retry attempts (3)
-      if (nodes.length > 0 && recalculationAttempts < 3) {
-        // Find branches without layout data, excluding ones that previously failed
+      if (nodes.length > 0) {
+        // Find branches without layout data
         const branchIdsWithoutLayout = nodes
           .filter(node => node.data.branchId)
           .map(node => node.data.branchId)
           .filter((id, index, self) => self.indexOf(id) === index) // unique only
-          .filter(id => !layoutData || !layoutData[id]) // no layout data
-          .filter(id => !failedBranchIds.has(id)); // not previously failed
+          .filter(id => !layoutData || !layoutData[id]);
         
         // If we found branches without layout data, trigger a recalculation
         if (branchIdsWithoutLayout.length > 0) {
           console.log(`Found ${branchIdsWithoutLayout.length} branches without layout data, recalculating...`);
-          
-          try {
-            setRecalculationAttempts(prev => prev + 1);
-            await recalculateLayout();
-          } catch (error) {
-            console.error("Layout recalculation failed:", error);
-            
-            // Mark these branches as failed to prevent retry
-            const newFailedBranchIds = new Set(failedBranchIds);
-            branchIdsWithoutLayout.forEach(id => newFailedBranchIds.add(id));
-            setFailedBranchIds(newFailedBranchIds);
-            
-            // Show a non-blocking error
-            console.warn("Unable to calculate layout automatically. You can try manual recalculation.");
-          }
+          await recalculateLayout();
         }
-      } else if (recalculationAttempts >= 3) {
-        console.warn("Maximum automatic layout recalculation attempts reached. Try manual recalculation.");
       }
     };
     
@@ -1171,7 +1142,7 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
     if (nodes.length > 0) {
       checkForLayoutRecalculation();
     }
-  }, [nodes, layoutData, recalculateLayout, recalculationAttempts, failedBranchIds]);
+  }, [nodes, layoutData, recalculateLayout]);
   
   // Loading state
   if (loading && nodes.length === 0) {

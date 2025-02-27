@@ -1,7 +1,6 @@
 import { query } from '@/lib/db';
 import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import SubwayLayoutService from '@/lib/layout/subwayLayoutService';
 
 export async function POST(req: Request) {
 	const { title, description, created_by } = await req.json();
@@ -77,15 +76,6 @@ export async function POST(req: Request) {
 					timestamp
 				]
 			);
-			
-			// Initialize layout for the main branch
-			try {
-				const layoutService = new SubwayLayoutService();
-				await layoutService.updateBranchPositions(projectId);
-			} catch (layoutError) {
-				console.warn('Initial layout calculation failed but proceeding with project creation', layoutError);
-				// Non-critical error - continue with project creation even if layout fails
-			}
 			
 			// Commit transaction
 			await query('COMMIT');

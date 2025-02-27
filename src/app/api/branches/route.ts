@@ -1,7 +1,6 @@
 import { query } from '@/lib/db';
 import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import SubwayLayoutService from '@/lib/layout/subwayLayoutService';
 
 /**
  * API endpoint for creating new branches from existing messages
@@ -166,15 +165,6 @@ export async function POST(req: Request) {
         WHERE timeline_nodes.id = new_positions.id`,
         [parent_branch_id]
       );
-
-      // Calculate and update branch layouts
-      const layoutService = new SubwayLayoutService();
-      try {
-        await layoutService.updateBranchPositions(project_id);
-      } catch (layoutError) {
-        console.warn('Branch layout calculation failed but proceeding with branch creation', layoutError);
-        // Non-critical error - continue with branch creation even if layout fails
-      }
 
       // Commit transaction
       await query('COMMIT');
