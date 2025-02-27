@@ -3,9 +3,12 @@
 
 import { useState, useEffect, useRef } from "react";
 import { ProjectDialog } from "@/components/projectDialog";
-import { Minimap } from "@/components/minimap";
+// import { Minimap } from "@/components/minimap";
+import { MinimapWithContext } from "@/components/minimapWithContext";
 import { ChatControls } from "@/components/chat/chatControls";
-import { MessageList, MessageListRef } from "@/components/chat/messageList";
+import { ChatControlsWithContext } from "@/components/chat/chatControlsWithContext";
+// import { MessageList, MessageListRef } from "@/components/chat/messageList";
+import { MessageListWithContext } from "@/components/chat/messageListWithContext";
 import { Button } from "@/components/ui/button";
 import { 
 	PlusIcon, 
@@ -40,6 +43,7 @@ import {
 import { cn } from "@/lib/utils";
 import { TimelineNode } from "@/lib/types/database";
 import { ReactFlowProvider } from "reactflow";
+import { ConversationProvider } from "@/lib/contexts/ConversationContext";
 
 export default function Home() {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -197,25 +201,14 @@ export default function Home() {
 
 	// Add function to handle optimistic message updates
 	const handleOptimisticUpdate = (newMessages: TimelineNode[]) => {
-		// Process all messages, not just AI messages
-		// This ensures both user and assistant messages are properly handled
-		
-		// First, pass all messages to the MessageList component
-		if (messageListRef.current && messageListRef.current.handleOptimisticUpdate) {
-			messageListRef.current.handleOptimisticUpdate(newMessages);
-		}
-		
-		// Then, handle streaming content for AI messages
-		const aiMessage = newMessages.find(msg => msg.type === 'assistant-message');
-		if (aiMessage) {
-			// For real streaming implementation, we don't need to simulate word-by-word display
-			// The streaming will be handled by the backend and the UI will update as chunks arrive
-			setStreamingContent(aiMessage.message_text || '');
-		}
+		// This function is now handled by the ConversationContext
+		// We keep it for backward compatibility with ChatControls
+		console.log('Optimistic update handled by ConversationContext');
 	};
 
 	// Reference to the MessageList component to access its handleOptimisticUpdate method
-	const messageListRef = useRef<MessageListRef>(null);
+	// This is no longer needed with the context approach
+	// const messageListRef = useRef<MessageListRef>(null);
 
 	return (
 		<main className="flex flex-col h-screen max-h-screen bg-background">
@@ -292,11 +285,15 @@ export default function Home() {
 													</div>
 												) : (
 													<ReactFlowProvider key={`flow-mobile-${safeProjectId}`}>
-														<Minimap
+														{/* Replace Minimap with MinimapWithContext wrapped in ConversationProvider */}
+														<ConversationProvider 
 															projectId={safeProjectId}
-															currentBranchId={currentBranchId}
-															onSelectBranch={handleBranchSelect}
-														/>
+															initialBranchId={currentBranchId}
+														>
+															<MinimapWithContext 
+																onSelectNode={(nodeId) => console.log('Node selected:', nodeId)}
+															/>
+														</ConversationProvider>
 													</ReactFlowProvider>
 												)}
 											</div>
@@ -405,78 +402,76 @@ export default function Home() {
 				{/* Main Content Area */}
 				{selectedProject ? (
 					<div className="w-full flex flex-col md:flex-row h-full">
-						{/* Subway Map Section */}
-						<div className="h-[250px] md:h-auto md:w-3/5 border-b md:border-b-0 md:border-r">
-							{loading ? (
-								<div className="h-full w-full flex items-center justify-center">
-									<div className="animate-pulse flex flex-col items-center gap-3">
-										<Train className="h-8 w-8 text-primary/30" />
-										<div className="h-2 w-32 bg-muted rounded-full"></div>
-										<div className="h-2 w-40 bg-muted rounded-full mt-2"></div>
-									</div>
-								</div>
-							) : (
-								<ReactFlowProvider key={`flow-${safeProjectId}`}>
-									<Minimap
-										projectId={safeProjectId}
-										currentBranchId={currentBranchId}
-										onSelectBranch={handleBranchSelect}
-									/>
-								</ReactFlowProvider>
-							)}
-						</div>
-						
-						{/* Chat Section */}
-						<div className="flex-1 flex flex-col w-full md:w-2/5 overflow-hidden">
-							{/* Branch Info */}
-							{currentBranchId && (
-								<div className="px-4 pt-3 pb-2 flex items-center justify-between border-b">
-									<div className="flex items-center gap-2">
-										<GitBranch className="h-4 w-4 text-primary" />
-										<span className="text-sm font-medium">
-											Branch Active
-										</span>
-									</div>
-									<Button 
-										variant="ghost" 
-										size="sm" 
-										onClick={() => setCurrentBranchId(null)}
-										className="h-7 text-xs"
-									>
-										<Train className="h-3.5 w-3.5 mr-1.5" />
-										Return to Main Line
-									</Button>
-								</div>
-							)}
+						{/* Wrap the entire content area in a ConversationProvider */}
+						<ConversationProvider 
+							projectId={safeProjectId}
+							initialBranchId={currentBranchId}
+							key={`conversation-${safeProjectId}-${currentBranchId || 'main'}`}
+						>
+							{/* Debug log moved to useEffect inside ConversationProvider */}
 							
-							{/* Chat Area */}
-							<div className="flex-1 overflow-hidden flex flex-col">
-								<div className="flex-1 overflow-y-auto pb-2">
-									<MessageList 
-										ref={messageListRef}
-										projectId={safeProjectId} 
-										branchId={currentBranchId}
-										onBranchCreated={(newBranchId: string) => setCurrentBranchId(newBranchId)}
-										onBranchSwitch={handleBranchSelect}
-										streamingContent={streamingContent}
-										onOptimisticUpdate={handleOptimisticUpdate}
-									/>
-								</div>
-								
-								{/* Chat Controls */}
-								<div className="border-t bg-background/95 backdrop-blur-sm">
-									<div className="mx-auto">
-										<ChatControls
-											projectId={safeProjectId}
-											branchId={currentBranchId}
-											mainBranchId={mainBranchId || ''}
-											onOptimisticUpdate={handleOptimisticUpdate}
-											onMessageSubmit={() => setStreamingContent(null)} // Reset streaming content when submitting a new message
+							{/* Subway Map Section */}
+							<div className="h-[250px] md:h-auto md:w-3/5 border-b md:border-b-0 md:border-r">
+								{loading ? (
+									<div className="h-full w-full flex items-center justify-center">
+										<div className="animate-pulse flex flex-col items-center gap-3">
+											<Train className="h-8 w-8 text-primary/30" />
+											<div className="h-2 w-32 bg-muted rounded-full"></div>
+											<div className="h-2 w-40 bg-muted rounded-full mt-2"></div>
+										</div>
+									</div>
+								) : (
+									<ReactFlowProvider key={`flow-${safeProjectId}`}>
+										{/* Replace Minimap with MinimapWithContext */}
+										<MinimapWithContext 
+											onSelectNode={(nodeId) => console.log('Node selected:', nodeId)}
 										/>
+									</ReactFlowProvider>
+								)}
+							</div>
+							
+							{/* Chat Section */}
+							<div className="flex-1 flex flex-col w-full md:w-2/5 overflow-hidden">
+								{/* Branch Info */}
+								{currentBranchId && (
+									<div className="px-4 pt-3 pb-2 flex items-center justify-between border-b">
+										<div className="flex items-center gap-2">
+											<GitBranch className="h-4 w-4 text-primary" />
+											<span className="text-sm font-medium">
+												Branch Active
+											</span>
+										</div>
+										<Button 
+											variant="ghost" 
+											size="sm" 
+											onClick={() => setCurrentBranchId(null)}
+											className="h-7 text-xs"
+										>
+											<Train className="h-3.5 w-3.5 mr-1.5" />
+											Return to Main Line
+										</Button>
+									</div>
+								)}
+								
+								{/* Chat Area */}
+								<div className="flex-1 overflow-hidden flex flex-col">
+									<div className="flex-1 overflow-y-auto pb-2">
+										{/* Replace MessageList with MessageListWithContext */}
+										<MessageListWithContext />
+									</div>
+									
+									{/* Chat Controls */}
+									<div className="border-t bg-background/95 backdrop-blur-sm">
+										<div className="mx-auto">
+											{/* Replace ChatControls with ChatControlsWithContext */}
+											<ChatControlsWithContext 
+												onMessageSubmit={() => setStreamingContent(null)}
+											/>
+										</div>
 									</div>
 								</div>
 							</div>
-						</div>
+						</ConversationProvider>
 					</div>
 				) : (
 					<div className="flex items-center justify-center h-full">

@@ -16,7 +16,7 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    const projectId = params.id;
+    const projectId = await params.id;
     
     if (!projectId) {
       return NextResponse.json(
@@ -70,7 +70,7 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const projectId = params.id;
+    const projectId = await params.id;
     
     if (!projectId) {
       return NextResponse.json(

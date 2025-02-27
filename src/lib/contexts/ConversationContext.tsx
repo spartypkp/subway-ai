@@ -70,8 +70,15 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   projectId,
   initialBranchId = null,
   children,
-  pollingInterval = 3000,
+  pollingInterval = 5000,
 }) => {
+  // Add debugging logs
+  useEffect(() => {
+    console.log('🔍 DEBUG: ConversationProvider initialized with:');
+    console.log('🔍 DEBUG: - projectId:', projectId, typeof projectId);
+    console.log('🔍 DEBUG: - initialBranchId:', initialBranchId, typeof initialBranchId);
+  }, [projectId, initialBranchId]);
+
   // Data state
   const [branches, setBranches] = useState<Branch[]>([]);
   const [allNodes, setAllNodes] = useState<TimelineNode[]>([]);
@@ -168,7 +175,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Main data fetching function
   const fetchData = async (): Promise<void> => {
-    console.log('Fetching data for project:', projectId, 'branch:', currentBranchId || 'main');
+    console.log('🔍 DEBUG: Fetching data for project:', projectId, 'branch:', currentBranchId || 'main');
     setLoading(prev => ({ ...prev, data: true }));
     
     try {
@@ -177,6 +184,23 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         fetchBranches(),
         fetchNodes(),
       ]);
+      
+      // Log the data we received
+      console.log('🔍 DEBUG: Fetched data:', {
+        branchesCount: branchesData.length,
+        nodesCount: nodesData.length,
+        hasRootNode: nodesData.some(node => node.type === 'root')
+      });
+      
+      // Log the root node if found
+      const rootNode = nodesData.find(node => node.type === 'root');
+      if (rootNode) {
+        console.log('🔍 DEBUG: Root node in fetched data:', {
+          id: rootNode.id,
+          branch_id: rootNode.branch_id,
+          type: rootNode.type
+        });
+      }
       
       // Cleanup optimistic messages that now have real versions
       if (optimisticMessages.length > 0) {

@@ -12,7 +12,8 @@ import ReactFlow, {
   Panel,
   NodeTypes,
   Position,
-  PanelPosition
+  PanelPosition,
+  MiniMap as ReactFlowMiniMap
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Button } from '@/components/ui/button';
@@ -435,6 +436,22 @@ function hexToRgb(hex: string): string {
   return `${r}, ${g}, ${b}`;
 }
 
+// Define custom node types outside the component to prevent re-renders
+const nodeTypes: NodeTypes = {
+  branchPointNode: BranchPointNode,
+  branchRootNode: BranchRootNode, 
+  stationNode: StationNode,
+  rootNode: RootNode,
+};
+
+// Define default viewport and pro options outside the component
+const defaultViewport = { x: 0, y: 0, zoom: 0.8 };
+const proOptions = { hideAttribution: true };
+
+// Define panel positions to avoid casting on each render
+const topPanelPosition = 'top' as PanelPosition;
+const bottomPanelPosition = 'bottom' as PanelPosition;
+
 interface MinimapWithContextProps {
   onSelectNode?: (nodeId: string) => void;
 }
@@ -463,14 +480,6 @@ export function MinimapWithContext({ onSelectNode }: MinimapWithContextProps) {
   // Ref for the container
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // Define custom node types
-  const nodeTypes: NodeTypes = {
-    branchPoint: BranchPointNode,
-    branchRoot: BranchRootNode, 
-    station: StationNode,
-    root: RootNode,
-  };
-
   // Get responsive scaling based on viewport width
   const getResponsiveScaling = useCallback(() => {
     if (viewportWidth < 640) return { scale: 0.7, nodeSpacing: 40 }; // Small screens
@@ -545,7 +554,7 @@ export function MinimapWithContext({ onSelectNode }: MinimapWithContextProps) {
       const branchRootId = `branch-root-${branch.id}`;
       nodes.push({
         id: branchRootId,
-        type: 'branchRoot',
+        type: 'branchRootNode',
         position: { x: branchX, y: branchY },
         data: {
           branchId: branch.id,
@@ -566,7 +575,7 @@ export function MinimapWithContext({ onSelectNode }: MinimapWithContextProps) {
         // Add message node
         nodes.push({
           id: nodeId,
-          type: 'station',
+          type: 'stationNode',
           position: { x: branchX, y: yPos },
           data: {
             id: message.id,
@@ -647,7 +656,7 @@ export function MinimapWithContext({ onSelectNode }: MinimapWithContextProps) {
                 // Add branch point node
                 nodes.push({
                   id: branchPointNodeId,
-                  type: 'branchPoint',
+                  type: 'branchPointNode',
                   position: { x: parentX, y: branchPointY },
                   data: {
                     id: branch.branch_point_node_id,
@@ -709,7 +718,7 @@ export function MinimapWithContext({ onSelectNode }: MinimapWithContextProps) {
         const rootNodeId = 'root-node';
         nodes.push({
           id: rootNodeId,
-          type: 'root',
+          type: 'rootNode',
           position: { x: branchX, y: branchY - nodeSpacing * scale },
           data: {
             branchId: branch.id,
@@ -808,14 +817,37 @@ export function MinimapWithContext({ onSelectNode }: MinimapWithContextProps) {
             fitView
             minZoom={0.1}
             maxZoom={1.5}
-            defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
-            proOptions={{ hideAttribution: true }}
+            defaultViewport={defaultViewport}
+            proOptions={proOptions}
+            nodesDraggable={false}
+            nodesFocusable={true}
+            elementsSelectable={true}
+            onlyRenderVisibleElements={true}
+            onNodeClick={(_, node) => {
+              if (node.data.branchId) {
+                handleBranchSelect(node.data.branchId);
+              }
+              if (node.data.nodeId && onSelectNode) {
+                onSelectNode(node.data.nodeId);
+              }
+            }}
           >
             <Background />
             <Controls showInteractive={false} />
             
+            {/* Add MiniMap */}
+            <ReactFlowMiniMap 
+              style={{ 
+                height: 120,
+                backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                borderRadius: '8px',
+                border: '1px solid #e2e8f0',
+                margin: '8px'
+              }}
+            />
+            
             {/* Control panel at the top */}
-            <Panel position={"top" as PanelPosition} className="flex items-center gap-2 p-2 bg-background/80 backdrop-blur rounded-md">
+            <Panel position={topPanelPosition} className="flex items-center gap-2 p-2 bg-background/80 backdrop-blur rounded-md">
               <Button
                 size="sm"
                 variant="outline"
@@ -840,7 +872,7 @@ export function MinimapWithContext({ onSelectNode }: MinimapWithContextProps) {
             </Panel>
             
             {/* Branch legend panel */}
-            <Panel position={"bottom" as PanelPosition} className="bg-background/80 backdrop-blur rounded-md p-2">
+            <Panel position={bottomPanelPosition} className="bg-background/80 backdrop-blur rounded-md p-2">
               <div className="text-xs font-medium mb-1">Branches:</div>
               <div className="flex flex-wrap gap-2 max-w-md">
                 {branches.map(branch => (
