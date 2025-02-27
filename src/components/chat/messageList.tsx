@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
-import { TimelineNode, Branch, NodeType } from '@/lib/types/database';
+import React, { useState, useEffect, useRef, useLayoutEffect, useImperativeHandle, forwardRef } from 'react';
+import { TimelineNode, Branch, NodeType, OptimisticProps } from '@/lib/types/database';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
@@ -17,7 +17,8 @@ import {
   CornerDownRight,
   ArrowLeft,
   ExternalLink,
-  SwitchCamera
+  SwitchCamera,
+  Loader2
 } from 'lucide-react';
 import {
   Dialog,
@@ -42,6 +43,8 @@ interface MessageListProps {
   onBranchCreated: (newBranchId: string) => void;
   onBranchSwitch?: (branchId: string) => void; // New prop for branch switching
   onMessageSelect?: (messageId: string) => void; // For minimap integration
+  streamingContent?: string | null; // New prop to handle streaming content
+  onOptimisticUpdate?: (newMessages: TimelineNode[]) => void; // Expose the optimistic update handler
 }
 
 interface BranchPointInfo {
@@ -54,13 +57,17 @@ interface BranchPointInfo {
   childBranchColor: string;
 }
 
-export function MessageList({ 
+export const MessageList = forwardRef<
+  { handleOptimisticUpdate: (msgs: TimelineNode[]) => void },
+  MessageListProps
+>(({ 
   projectId, 
   branchId, 
   onBranchCreated, 
   onBranchSwitch, 
-  onMessageSelect 
-}: MessageListProps) {
+  onMessageSelect,
+  streamingContent,
+}, ref) => {
   const [allMessages, setAllMessages] = useState<TimelineNode[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +83,11 @@ export function MessageList({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [branchPoints, setBranchPoints] = useState<BranchPointInfo[]>([]);
   const [availableBranches, setAvailableBranches] = useState<Branch[]>([]);
+  
+  // New state for optimistic messages
+  const [optimisticMessages, setOptimisticMessages] = useState<TimelineNode[]>([]);
+  // New state for streaming AI response
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   
   // New state for subway track segments
   const [trackSegments, setTrackSegments] = useState<Array<{
@@ -95,6 +107,9 @@ export function MessageList({
 
   // Add an additional state to track branch switching specifically
   const [isSwitchingBranch, setIsSwitchingBranch] = useState(false);
+
+  // Store streaming message content for properly accumulating chunks
+  const streamingMessagesRef = useRef<Record<string, string>>({});
 
   // Build a path from root to the current branch node
   const buildMessagePath = (messages: TimelineNode[], branches: Branch[], targetBranchId: string | null): TimelineNode[] => {
@@ -174,8 +189,29 @@ export function MessageList({
 
   // Get messages to display based on the current branch
   const displayedMessages = React.useMemo(() => {
-    return buildMessagePath(allMessages, branches, branchId);
-  }, [allMessages, branches, branchId]);
+    // Combine real and optimistic messages
+    let combined = [...allMessages];
+    
+    if (optimisticMessages.length > 0) {
+      // Add optimistic messages that aren't already in allMessages
+      for (const optMsg of optimisticMessages) {
+        // Check if this optimistic message is already in allMessages
+        const exists = allMessages.some(m => 
+          (optMsg.id === m.id) || 
+          (optMsg.message_text === m.message_text && 
+           optMsg.type === m.type && 
+           optMsg.branch_id === m.branch_id)
+        );
+        
+        if (!exists) {
+          combined.push(optMsg);
+        }
+      }
+    }
+    
+    // Apply message path building with combined messages
+    return buildMessagePath(combined, branches, branchId);
+  }, [allMessages, optimisticMessages, branches, branchId]);
 
   // Find and track all branch points in the conversation
   useEffect(() => {
@@ -223,10 +259,10 @@ export function MessageList({
     }
   }, [allMessages, branches, branchId]);
 
-  // Function to fetch messages
+  // Function to fetch messages - modified to handle optimistic updates
   const fetchMessages = async () => {
     console.log('Fetching messages for project:', projectId, 'branch:', branchId || 'main');
-    setLoading(true);
+    setLoading(allMessages.length === 0); // Only show loading for initial load
     try {
       // Fetch all branches for the project
       const branchesResponse = await fetch(`/api/projects/${projectId}/branches`);
@@ -252,6 +288,44 @@ export function MessageList({
       // Store all messages
       setAllMessages(data);
       
+      // If we have successfully fetched messages, clear optimistic messages
+      // that are no longer needed (their real versions are in the data)
+      if (optimisticMessages.length > 0) {
+        // Use a more robust way to check if real messages have arrived
+        // that match our optimistic ones
+        setTimeout(() => {
+          const updatedOptimisticMessages = optimisticMessages.filter(optMsg => {
+            // For user messages, check if a real message with same content exists
+            if (optMsg.type === 'user-message') {
+              return !data.some((realMsg: TimelineNode) => 
+                realMsg.type === 'user-message' && 
+                realMsg.message_text === optMsg.message_text
+              );
+            }
+            
+            // For AI messages, we need to be careful as real content might be different
+            // Keep them if they are still marked as streaming
+            if (optMsg.type === 'assistant-message') {
+              // If this message is still marked as loading, keep it
+              if (optMsg.isLoading) return true;
+              
+              // If streaming isn't done yet, keep it
+              if (optMsg.id === streamingMessageId && streamingContent !== null) return true;
+              
+              // Check if a real message with similar content exists
+              return !data.some((realMsg: TimelineNode) => 
+                realMsg.type === 'assistant-message' &&
+                realMsg.parent_id === optMsg.parent_id
+              );
+            }
+            
+            return true;
+          });
+          
+          setOptimisticMessages(updatedOptimisticMessages);
+        }, 100);
+      }
+      
       // Hide loading indicator
       setShowLoadingIndicator(false);
     } catch (error) {
@@ -261,6 +335,121 @@ export function MessageList({
     }
     return true; // Return a resolved promise value
   };
+
+  // Update optimistic AI message content when streamingContent changes
+  useEffect(() => {
+    if (streamingContent !== undefined && streamingContent !== null && streamingMessageId) {
+      setOptimisticMessages(prev => 
+        prev.map(msg => 
+          msg.id === streamingMessageId
+            ? { ...msg, message_text: streamingContent, isLoading: false }
+            : msg
+        )
+      );
+    }
+  }, [streamingContent, streamingMessageId]);
+
+  // Add function to handle optimistic message updates
+  const handleOptimisticUpdate = (newMessages: TimelineNode[]) => {
+    console.log('Adding optimistic messages:', newMessages);
+    
+    // Process each message
+    for (const msg of newMessages) {
+      // Handle streaming chunks
+      if ((msg as TimelineNode & OptimisticProps).isStreamChunk && msg.id) {
+        // Accumulate streaming chunks
+        const currentContent = streamingMessagesRef.current[msg.id] || '';
+        const newContent = currentContent + (msg.message_text || '');
+        streamingMessagesRef.current[msg.id] = newContent;
+        
+        // Update the message with accumulated content
+        setOptimisticMessages(prev => 
+          prev.map(existingMsg => 
+            existingMsg.id === msg.id
+              ? { ...existingMsg, message_text: newContent, isLoading: false }
+              : existingMsg
+          )
+        );
+        
+        // Immediately scroll to bottom for better UX during streaming
+        setTimeout(scrollToBottom, 10);
+        continue;
+      }
+      
+      // Handle first chunk of streaming
+      if ((msg as TimelineNode & OptimisticProps).isFirstChunk && msg.id) {
+        // Initialize streaming message content
+        streamingMessagesRef.current[msg.id] = msg.message_text || '';
+        
+        // Find if this message already exists in optimistic messages
+        const existingMessage = optimisticMessages.find(m => m.id === msg.id);
+        
+        if (existingMessage) {
+          // Update existing message
+          setOptimisticMessages(prev => 
+            prev.map(m => 
+              m.id === msg.id
+                ? { ...m, message_text: msg.message_text || '', isLoading: false }
+                : m
+            )
+          );
+        } 
+        // Immediately scroll to bottom
+        setTimeout(scrollToBottom, 10);
+        continue;
+      }
+      
+      // Handle completion of streaming
+      if ((msg as TimelineNode & OptimisticProps).isComplete && msg.id) {
+        // Delete from streaming ref since streaming is complete
+        delete streamingMessagesRef.current[msg.id];
+        
+        // Update message with final content
+        setOptimisticMessages(prev => 
+          prev.map(m => 
+            m.id === msg.id
+              ? { ...m, message_text: msg.message_text || '', optimistic: false, isLoading: false }
+              : m
+          )
+        );
+        
+        // Set streaming message ID to null
+        if (streamingMessageId === msg.id) {
+          setStreamingMessageId(null);
+        }
+        
+        continue;
+      }
+      
+      // Handle regular optimistic message updates
+      if (msg.type === 'assistant-message' && msg.optimistic) {
+        setStreamingMessageId(msg.id);
+      }
+      
+      // Add to optimistic messages
+      setOptimisticMessages(prev => {
+        // If a message with this ID already exists, update it
+        const exists = prev.some(existing => existing.id === msg.id);
+        
+        if (exists) {
+          return prev.map(existing => 
+            existing.id === msg.id ? { ...existing, ...msg } : existing
+          );
+        } else {
+          // Otherwise add as new
+          return [...prev, msg];
+        }
+      });
+    }
+    
+    // Immediately scroll to bottom for better UX
+    setTimeout(scrollToBottom, 100);
+  };
+
+  // Expose the handleOptimisticUpdate function via useImperativeHandle
+  useImperativeHandle(ref, () => ({
+    handleOptimisticUpdate
+  }));
 
   // Fetch messages when project or branch changes
   useEffect(() => {
@@ -272,14 +461,27 @@ export function MessageList({
     const interval = setInterval(() => {
       // Only poll if we're possibly waiting for an AI response
       const lastMessage = displayedMessages[displayedMessages.length - 1];
-      if (lastMessage && (lastMessage.type === 'user-message')) {
-            setShowLoadingIndicator(true);
+      if (lastMessage && (lastMessage.type === 'user-message' || (lastMessage.optimistic && lastMessage.isLoading))) {
+        setShowLoadingIndicator(true);
         fetchMessages();
       }
     }, 3000);
 
     return () => clearInterval(interval);
   }, [displayedMessages]);
+
+  // Update optimistic AI message content when streamingContent changes
+  useEffect(() => {
+    if (streamingContent !== undefined && streamingContent !== null && streamingMessageId) {
+      setOptimisticMessages(prev => 
+        prev.map(msg => 
+          msg.id === streamingMessageId
+            ? { ...msg, message_text: streamingContent, isLoading: false }
+            : msg
+        )
+      );
+    }
+  }, [streamingContent, streamingMessageId]);
 
   // Handle scroll events to show/hide scroll to bottom button
   useEffect(() => {
@@ -317,23 +519,36 @@ export function MessageList({
     }
   }, [displayedMessages, loading]);
 
-  // Format message text with markdown-like formatting
-  const formatMessageText = (text: string): string => {
+  // Format message text with special rendering for streaming
+  const formatMessageText = (text: string, isStreaming?: boolean): React.ReactNode => {
     if (!text) return '';
     
-    // Replace newlines with <br>
-    let formatted = text.replace(/\n/g, '<br>');
+    // Convert newlines to breaks for proper rendering
+    const formattedText = text.split('\n').map((line, i) => (
+      <React.Fragment key={i}>
+        {line}
+        {i < text.split('\n').length - 1 && <br />}
+      </React.Fragment>
+    ));
     
-    // Bold: **text** -> <strong>text</strong>
-    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // Use regular text for non-streaming messages
+    if (!isStreaming) {
+      return formattedText;
+    }
     
-    // Italic: *text* -> <em>text</em>
-    formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    
-    // Code: `text` -> <code>text</code>
-    formatted = formatted.replace(/`(.*?)`/g, '<code>$1</code>');
-    
-    return formatted;
+    // For streaming messages, add a blinking cursor at the end
+    return (
+      <>
+        {formattedText}
+        <span className="inline-block h-4 w-1 ml-0.5 bg-primary animate-blink" />
+      </>
+    );
+  };
+
+  // Check if a message is currently streaming
+  const isMessageStreaming = (message: TimelineNode): boolean => {
+    if (!message.id) return false;
+    return !!streamingMessagesRef.current[message.id] || message.id === streamingMessageId;
   };
 
   // Update the isBranchTransition function to be smarter about transitions
@@ -686,6 +901,13 @@ export function MessageList({
     };
   };
 
+  // Pass the optimistic update handler to the ChatControls component via App's onMessageSubmit
+  const handleMessageSubmit = () => {
+    // This function should be passed to ChatControls
+    // It will be called after a message is submitted
+    fetchMessages();
+  };
+
   return (
    <>
       <div 
@@ -832,22 +1054,29 @@ export function MessageList({
               const messageText = message.message_text || '';
               const stationNumber = getStationNumber(message, index, displayedMessages);
               const branchColor = getBranchColor(message.branch_id);
+              
+              // Check if this is an optimistic message currently streaming
+              const isOptimistic = Boolean(message.optimistic);
+              const isStreaming = isOptimistic && message.type === 'assistant-message' && 
+                                 message.id === streamingMessageId;
                 
                 return (
                   <div 
                     key={message.id} 
                     className={cn(
-                  "group relative z-10 my-6",
-                    isUser ? "ml-4 mr-16 md:ml-16 md:mr-24" : "ml-16 mr-4 md:ml-24 md:mr-16",
+                      "group relative z-10 my-6",
+                      isUser ? "ml-4 mr-16 md:ml-16 md:mr-24" : "ml-16 mr-4 md:ml-24 md:mr-16",
+                      isOptimistic && "animate-fadeIn"
                     )}
                     onMouseEnter={() => setActiveMessage(message.id)}
                     onMouseLeave={() => setActiveMessage(null)}
-                  onClick={() => handleMessageSelect(message.id)}
-                  data-node="message"
-                  data-id={message.id}
-                  data-branch={message.branch_id}
-                  data-type={message.type}
-                >
+                    onClick={() => handleMessageSelect(message.id)}
+                    data-node="message"
+                    data-id={message.id}
+                    data-branch={message.branch_id}
+                    data-type={message.type}
+                    data-optimistic={isOptimistic ? 'true' : 'false'}
+                  >
                   {/* Branch line extending to the side if this is a branch point */}
                   {hasBranchOptions && !isUser && (
                     <div className="absolute left-1/2 top-1/2 transform -translate-y-1/2 z-0">
@@ -926,7 +1155,8 @@ export function MessageList({
                         ? "text-primary-foreground shadow-sm shadow-primary/10" 
                         : "border shadow-sm hover:shadow",
                       activeMessage === message.id && "ring-2 ring-offset-2",
-                      "group-hover:shadow-md"
+                      "group-hover:shadow-md",
+                      isOptimistic && (message.isLoading || isStreaming) && "border-primary/40"
                     )}
                     style={{ 
                       borderColor: isUser ? branchColor : undefined,
@@ -945,58 +1175,67 @@ export function MessageList({
                         "px-2 py-0.5 text-[10px] font-medium border-b",
                         isUser 
                           ? "bg-black/10 border-black/10 text-white/90" 
-                          : "bg-muted/30 border-muted/30 text-muted-foreground"
+                          : "bg-muted/30 border-muted/30 text-muted-foreground",
+                        isOptimistic && !isUser && message.isLoading && "bg-primary/10 border-primary/20"
                       )}
                     >
-                      {new Date(message.created_at).toLocaleTimeString([], { 
-                        hour: '2-digit', 
-                        minute: '2-digit'
-                      })}
+                      {isOptimistic 
+                        ? 'Just now' 
+                        : new Date(message.created_at).toLocaleTimeString([], { 
+                            hour: '2-digit', 
+                            minute: '2-digit'
+                          })
+                      }
                       {!isUser && (
                         <span className="ml-1">• Station {stationNumber}</span>
                       )}
                     </div>
                     
                     <div className="p-3.5">
-                      <div 
-                        className={cn(
-                          "prose prose-sm max-w-none",
-                          isUser ? "prose-invert" : "dark:prose-invert"
-                        )}
-                        dangerouslySetInnerHTML={{ __html: formatMessageText(messageText) }}
-                      />
+                      <div className={cn(
+                        "prose prose-sm dark:prose-invert max-w-none",
+                        isStreaming && "streaming-message"
+                      )}>
+                        {/* Use formatMessageText to render with streaming effect if needed */}
+                        {formatMessageText(messageText, isStreaming)}
+                      </div>
                     </div>
                       
-                    {/* AI message footer */}
+                    {/* AI message footer - only show branch button for non-optimistic messages */}
                       {!isUser && (
                       <div className="px-3.5 py-2 bg-muted/10 border-t border-muted/20 flex justify-between items-center text-xs text-muted-foreground">
                           <div className="flex items-center gap-1">
                             <Sparkles className="h-3 w-3" />
                             <span>AI Assistant</span>
+                            {isOptimistic && message.isLoading && (
+                              <span className="ml-2 text-primary animate-pulse">thinking...</span>
+                            )}
                           </div>
                       
-                        {/* Branch button */}
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                      <Button
-                                variant="ghost" 
-                        size="sm"
-                                className="h-6 px-2 text-xs hover:bg-background rounded-full border border-transparent hover:border-muted" 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleBranchClick(message.id);
-                                }}
-                              >
-                                <GitBranch className="h-3 w-3 mr-1" /> 
-                                Branch
-                      </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              Create a new conversation branch from this point
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        {/* Branch button - only show for non-optimistic messages */}
+                        {!isOptimistic && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost" 
+                                  size="sm"
+                                  className="h-6 px-2 text-xs hover:bg-background rounded-full border border-transparent hover:border-muted" 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleBranchClick(message.id);
+                                  }}
+                                >
+                                  <GitBranch className="h-3 w-3 mr-1" /> 
+                                  Branch
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Create a new conversation branch from this point
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
                       </div>
                     )}
                   </Card>
@@ -1118,7 +1357,7 @@ export function MessageList({
           })}
         
         {/* Loading indicator for new messages */}
-        {showLoadingIndicator && (
+        {showLoadingIndicator && optimisticMessages.length === 0 && (
           <div 
             className="flex justify-center py-4 z-10"
             data-node="loading-indicator"
@@ -1216,6 +1455,19 @@ export function MessageList({
           animation: pulse 1.5s ease-in-out infinite;
         }
         
+        @keyframes cursor {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+        
+        .animate-cursor {
+          animation: cursor 0.8s step-end infinite;
+          display: inline-block;
+          margin-left: 2px;
+          color: currentColor;
+          font-weight: bold;
+        }
+        
         .animate-delay-200 {
           animation-delay: 0.2s;
         }
@@ -1226,4 +1478,4 @@ export function MessageList({
       `}</style>
     </>
   );
-} 
+}); 

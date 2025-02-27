@@ -135,63 +135,89 @@ export type UpdateExpert = Partial<CreateExpert>;
 export type NodeType = 'root' | 'branch-root' | 'user-message' | 'assistant-message' | 'branch-point';
 export type NodeStatus = 'active' | 'archived' | 'hidden' | 'featured';
 
-// Base node interface
-interface BaseNode {
+// OptimisticProps interface for the properties shared by optimistic messages
+export interface OptimisticProps {
+	optimistic?: boolean;
+	isLoading?: boolean;
+	isStreamChunk?: boolean;
+	isFirstChunk?: boolean;
+	isComplete?: boolean;
+	error?: boolean;
+}
+
+// Base TimelineNode interface
+export interface TimelineNode {
 	id: string;
 	project_id: string;
 	branch_id: string;
 	parent_id: string | null;
 	type: NodeType;
-	status: NodeStatus;
-	message_text: string | null;
-	message_role: string | null;
+	status?: string;
 	position: number;
 	created_by: string;
 	created_at: string;
-	metadata: Record<string, any> | null;
-	// Additional fields from joins
+	updated_at?: string;
+	message_text?: string;
+	message_role?: string;
 	branch_name?: string;
 	branch_color?: string;
 	branch_depth?: number;
 	parent_branch_id?: string;
 	parent_branch_name?: string;
 	parent_branch_color?: string;
+	metadata?: Record<string, any>;
+	optimistic?: boolean;
+	isLoading?: boolean;
 }
 
 // Root node (start of project)
-export interface RootNode extends BaseNode {
+export interface RootNode extends TimelineNode {
 	type: 'root';
 }
 
 // Branch root node (start of a branch)
-export interface BranchRootNode extends BaseNode {
+export interface BranchRootNode extends TimelineNode {
 	type: 'branch-root';
 }
 
 // User message node
-export interface UserMessageNode extends BaseNode {
+export interface UserMessageNode extends TimelineNode {
 	type: 'user-message';
 	message_text: string;
 	message_role: 'user';
 }
 
 // Assistant message node
-export interface AssistantMessageNode extends BaseNode {
+export interface AssistantMessageNode extends TimelineNode {
 	type: 'assistant-message';
 	message_text: string;
 	message_role: 'assistant';
 }
 
 // Branch point node (where branches diverge)
-export interface BranchPointNode extends BaseNode {
+export interface BranchPointNode extends TimelineNode {
 	type: 'branch-point';
 	child_branches?: Branch[];
 }
 
-// Union type for all node types
-export type TimelineNode = 
-	| RootNode 
-	| BranchRootNode 
-	| UserMessageNode 
-	| AssistantMessageNode 
-	| BranchPointNode; 
+export type TimelineNodeUnion = RootNode | BranchRootNode | UserMessageNode | AssistantMessageNode | BranchPointNode;
+
+// Branch interface
+export interface Branch {
+	id: string;
+	project_id: string;
+	name: string | null;
+	color: string | null;
+	depth: number;
+	is_active: boolean;
+	parent_branch_id: string | null;
+	branch_point_node_id: string | null;
+	created_by: string;
+	created_at: string;
+	message_count?: number;
+	parent_branch_name?: string;
+	parent_branch_color?: string;
+	branch_point_id?: string;
+	branch_parent_message_id?: string;
+	child_branch_count?: number;
+} 

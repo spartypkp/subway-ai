@@ -1,7 +1,7 @@
 // app/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ProjectDialog } from "@/components/projectDialog";
 import { Minimap } from "@/components/minimap";
 import { ChatControls } from "@/components/chat/chatControls";
@@ -38,6 +38,7 @@ export default function Home() {
 	const [currentBranchId, setCurrentBranchId] = useState<string | null>(null);
 	const [mainBranchId, setMainBranchId] = useState<string | null>(null);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+	const [streamingContent, setStreamingContent] = useState<string | null>(null);
 
 	const selectedProject = projects.find(p => p.id === selectedProjectId);
 
@@ -147,6 +148,51 @@ export default function Home() {
 
 	// Safety check to ensure we always have a valid string for projectId
 	const safeProjectId = selectedProjectId || '';
+
+	// Update the messageListRef definition to match the forwardRef type from MessageList component
+	const messageListRef = useRef<{ handleOptimisticUpdate: (msgs: TimelineNode[]) => void }>(null);
+
+	// Add function to handle optimistic message updates
+	const handleOptimisticUpdate = (newMessages: TimelineNode[]) => {
+		console.log('🔍 DEBUG: Handling optimistic update with messages:', newMessages.length);
+		
+		// Pass ALL messages to the MessageList component's handleOptimisticUpdate function
+		if (messageListRef.current) {
+			messageListRef.current.handleOptimisticUpdate(newMessages);
+		} else {
+			console.warn('🔍 DEBUG: messageListRef is null, cannot update MessageList');
+		}
+
+		// Find the AI message from the optimistic update for streaming simulation
+		const aiMessage = newMessages.find(msg => msg.type === 'assistant-message');
+		if (aiMessage) {
+			// Start with empty content for streaming effect
+			setStreamingContent('');
+			
+			// In a real implementation, this would connect to a streaming API
+			// For now, we'll simulate streaming with a simple timer that adds text gradually
+			const fullResponse = aiMessage.message_text || '';
+			let currentText = '';
+			const words = fullResponse.split(' ');
+			
+			// Clear any existing interval
+			const intervalId = setInterval(() => {
+				if (words.length === 0) {
+					clearInterval(intervalId);
+					return;
+				}
+				
+				// Add the next word
+				currentText += (currentText ? ' ' : '') + words.shift();
+				setStreamingContent(currentText);
+				
+				// When done, clear the interval
+				if (words.length === 0) {
+					clearInterval(intervalId);
+				}
+			}, 100); // Adjust timing as needed
+		}
+	};
 
 	return (
 		<main className="flex flex-col h-screen max-h-screen bg-background">
@@ -370,10 +416,12 @@ export default function Home() {
 							<div className="flex-1 overflow-hidden flex flex-col">
 								<div className="flex-1 overflow-y-auto pb-2">
 									<MessageList 
+										ref={messageListRef}
 										projectId={safeProjectId} 
 										branchId={currentBranchId}
 										onBranchCreated={(newBranchId: string) => setCurrentBranchId(newBranchId)}
 										onBranchSwitch={handleBranchSelect}
+										streamingContent={streamingContent}
 									/>
 								</div>
 								
@@ -384,6 +432,8 @@ export default function Home() {
 											projectId={safeProjectId}
 											branchId={currentBranchId}
 											mainBranchId={mainBranchId || ''}
+											onOptimisticUpdate={handleOptimisticUpdate}
+											onMessageSubmit={() => setStreamingContent(null)} // Reset streaming content when submitting a new message
 										/>
 									</div>
 								</div>
