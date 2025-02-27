@@ -1,5 +1,27 @@
 "use client";
 
+/**
+ * Subway Minimap Component
+ * 
+ * This component visualizes conversation branches as a subway map using ReactFlow.
+ * It integrates with SubwayLayoutService to calculate optimal branch positions
+ * and avoid overlaps in complex branch hierarchies.
+ * 
+ * Key features:
+ * - Tree-aware layout using the Dagre algorithm
+ * - Automatic branch direction assignment
+ * - Visual indicators for branch points with multiple children
+ * - Responsive scaling for different viewport sizes
+ * - Automatic recalculation when branches are added
+ * - Manual recalculation option
+ * 
+ * Layout data flow:
+ * 1. On initial load, attempts to fetch layout data from API
+ * 2. If layout data exists, it's used for branch positioning
+ * 3. If layout data is missing, falls back to basic calculations
+ * 4. When layout is recalculated, updates branch metadata in the database
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import ReactFlow, {
   Background,
@@ -17,8 +39,9 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Branch, TimelineNode } from '@/lib/types/database';
-import { GitBranch, MessageSquare, Train } from 'lucide-react';
+import { GitBranch, MessageSquare, Train, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { BranchLayout } from '@/lib/layout/subwayLayoutService';
 
 interface MinimapProps {
   projectId: string;
@@ -34,7 +57,7 @@ const nodeTypes = {
   branchRootNode: BranchRootNode
 };
 
-// Generate branch colors
+// Generate branch colors - only used as fallback if branch doesn't have a color
 const getBranchColor = (depth: number): string => {
   const colors = [
     '#3b82f6', // blue-500 (main line)
@@ -55,12 +78,16 @@ function BranchPointNode({ data }: NodeProps) {
   // Determine which way the branch is going (left or right)
   const isRightBranch = data.childBranchDirection === 'right';
   
+  // Show an indicator if this point has multiple children
+  const hasMultipleChildren = data.childCount > 1;
+  
   return (
     <div 
       className={cn(
         "p-1 rounded-full shadow-md flex items-center justify-center bg-white transition-all duration-300",
         data.isActive ? "ring-2 ring-offset-1 shadow-lg" : "hover:shadow-md",
-        data.isOnActivePath ? "scale-110" : ""
+        data.isOnActivePath ? "scale-110" : "",
+        hasMultipleChildren ? "ring-1 ring-offset-1" : ""
       )}
       style={{ 
         borderColor: data.color,
@@ -70,9 +97,17 @@ function BranchPointNode({ data }: NodeProps) {
         background: data.isActive ? '#f8fafc' : 'white',
         boxShadow: data.isOnActivePath ? `0 0 8px rgba(${hexToRgb(data.childBranchColor || data.color)}, 0.5)` : undefined,
       }}
-      title={`Branch point to: ${data.childBranchName || 'another branch'}`}
+      title={`Branch point to: ${data.childBranchName || 'another branch'}${hasMultipleChildren ? ` (+ ${data.childCount - 1} more)` : ''}`}
     >
       <GitBranch size={16} style={{ color: data.color, transform: isRightBranch ? 'scaleX(1)' : 'scaleX(-1)' }} />
+      
+      {/* Show a small indicator for multiple branches */}
+      {hasMultipleChildren && (
+        <div className="absolute -bottom-1 -right-1 bg-gray-100 rounded-full w-4 h-4 border border-gray-300 flex items-center justify-center">
+          <span className="text-[8px] font-bold text-gray-700">{data.childCount}</span>
+        </div>
+      )}
+      
       <Handle 
         id="target-main"
         type="target" 
@@ -119,14 +154,15 @@ function BranchPointNode({ data }: NodeProps) {
           zIndex: 1
         }} 
       />
-      
-      
     </div>
   );
 }
 
 // Custom node for branch roots (starting points of new branches)
 function BranchRootNode({ data }: NodeProps) {
+  // Determine which way the branch is going
+  const isRightBranch = data.branchDirection === 'right';
+  
   return (
     <div 
       className={cn(
@@ -144,6 +180,15 @@ function BranchRootNode({ data }: NodeProps) {
       title={`Start of branch: ${data.branchName || 'Branch'}`}
     >
       <div className="w-3 h-3 rounded-full" style={{ background: data.color }} />
+      
+      {/* Direction indicator */}
+      <div 
+        className="absolute top-full mt-3 text-[9px] font-bold opacity-70" 
+        style={{ color: data.color }}
+      >
+        {isRightBranch ? '→' : '←'}
+      </div>
+      
       <Handle 
         id="left"
         type="target" 
@@ -427,6 +472,10 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const reactFlowInstance = useReactFlow();
+  const [layoutData, setLayoutData] = useState<Record<string, BranchLayout> | null>(null);
+  // Add state to track failed recalculation attempts
+  const [recalculationAttempts, setRecalculationAttempts] = useState(0);
+  const [failedBranchIds, setFailedBranchIds] = useState<Set<string>>(new Set());
   
   // State to track if we're showing the branch labels
   const [showBranchLabels, setShowBranchLabels] = useState(false);
@@ -444,7 +493,9 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       color: string, 
       nodes: TimelineNode[],
       branch: Branch,
-      xPosition: number
+      xPosition: number,
+      yOffset: number,
+      direction?: 'left' | 'right' // Add direction property
     }>();
     
     // Find the main branch (depth 0)
@@ -459,10 +510,10 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
     // Sort branches by depth
     const sortedBranches = [...branches].sort((a, b) => a.depth - b.depth);
     
-    // Assign x-positions to branches - using a strict grid layout
-    const centerX = 400; // Center position
+    // Center position for the visualization
+    const centerX = 400; 
     
-    // Responsive branch spacing based on viewport width
+    // Responsive branch spacing based on viewport width (for fallback calculations)
     const getResponsiveBranchSpacing = () => {
       const width = typeof window !== 'undefined' ? window.innerWidth : 1200;
       if (width < 640) return 180; // Small screens
@@ -472,23 +523,50 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
     
     const branchSpacing = getResponsiveBranchSpacing();
     
-    // Assign positions - main branch in center, odd depths to the right, even depths to the left
+    // Scaling factors for layout coordinates to ReactFlow coordinates
+    const xScaleFactor = 1.5;  // Adjust based on visual testing
+    const yScaleFactor = 100;  // Vertical spacing between nodes
+    
+    // Assign positions using layout data when available, fall back to default calculation
     sortedBranches.forEach(branch => {
       let xPosition;
-      if (branch.depth === 0) {
-        xPosition = centerX; // Main branch in center
-      } else if (branch.depth % 2 === 1) {
-        xPosition = centerX + (Math.ceil(branch.depth / 2) * branchSpacing);
+      let yOffset = 0;
+      let direction: 'left' | 'right' | undefined = undefined;
+      
+      // If we have layout data for this branch, use it
+      if (layoutData && layoutData[branch.id]) {
+        const layout = layoutData[branch.id];
+        
+        // Apply proper coordinate scaling from layout service to ReactFlow
+        xPosition = centerX + (layout.x * xScaleFactor);
+        yOffset = layout.siblingIndex * 30; // Vertical offset based on sibling index
+        
+        // Use direction from layout data
+        direction = layout.direction as 'left' | 'right';
+        
+        console.log(`Using layout data for branch ${branch.id}: x=${xPosition}, yOffset=${yOffset}, direction=${direction}`);
       } else {
-        xPosition = centerX - (branch.depth / 2 * branchSpacing);
+        // Fall back to the old calculation method
+        if (branch.depth === 0) {
+          xPosition = centerX; // Main branch in center
+          direction = 'right'; // Default direction for main branch
+        } else if (branch.depth % 2 === 1) {
+          xPosition = centerX + (Math.ceil(branch.depth / 2) * branchSpacing);
+          direction = 'right';
+        } else {
+          xPosition = centerX - (branch.depth / 2 * branchSpacing);
+          direction = 'left';
+        }
       }
       
       branchMap.set(branch.id, {
         depth: branch.depth,
         color: branch.color || getBranchColor(branch.depth),
-            nodes: [],
+        nodes: [],
         branch,
-        xPosition
+        xPosition,
+        yOffset,
+        direction
       });
     });
     
@@ -560,7 +638,8 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       parentBranchId: string,
       childBranchId: string,
       position: number,
-      branchPointNode: TimelineNode // Store the branch point node reference
+      branchPointNode: TimelineNode, // Store the branch point node reference
+      direction?: 'left' | 'right' // Add direction from layout
     }[] = [];
     
     // Find all branch connections
@@ -576,13 +655,20 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
         );
         if (!branchRootNode) return;
         
+        // Get direction from layout data if available
+        let direction: 'left' | 'right' | undefined = undefined;
+        if (layoutData && layoutData[branch.id]) {
+          direction = layoutData[branch.id].direction as 'left' | 'right';
+        }
+        
         branchConnections.push({
           branchPointId: branch.branch_point_node_id,
           branchRootId: branchRootNode.id,
           parentBranchId: branch.parent_branch_id,
           childBranchId: branch.id,
           position: branchPointNode.position,
-          branchPointNode // Store reference to the branch point node
+          branchPointNode,
+          direction
         });
       }
     });
@@ -677,7 +763,7 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       // Sort stations by position
       stations.sort((a, b) => a.position - b.position);
 
-      // Add branch root node if this is a child branch
+      // Apply vertical offset to branch root position
       let branchRootYPosition = 150; // Default Y position
       if (branchRoot) {
         // Find the matching branch connection
@@ -699,7 +785,12 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
               color,
               branchId,
               isActive,
-              branchName
+              branchName: branch.metadata?.siblingInfo 
+                ? `${branchName} ${branch.metadata.siblingInfo}` 
+                : branchName,
+              branchDirection: branchData.direction || // First use branch data from layout
+                              connection.direction || // Then connection direction from layout
+                              (branchData.xPosition > mainBranchData.xPosition ? 'right' : 'left') // Fallback calculation
             }
           });
         }
@@ -723,6 +814,9 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       // For child branches, adjust station Y positions to start below the branch root
       // This ensures child branch stations are properly positioned in relation to the branch root
       if (branchId !== mainBranch.id && branchRoot) {
+        // Get any vertical offset that was applied to this branch
+        const verticalOffset = branchData.yOffset || 0;
+        
         // Recalculate Y positions for stations in child branches
         stations.forEach((station, index) => {
           // Start positioning stations below the branch root with proper spacing
@@ -747,10 +841,10 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
             const childBranchData = branchMap.get(childBranchConnection.childBranchId);
             if (!childBranchData) return;
             
-            // Determine branch direction (left or right)
-            const parentXPosition = xPosition;
-            const childXPosition = childBranchData.xPosition;
-            const branchDirection = childXPosition > parentXPosition ? 'right' : 'left';
+            // Use direction from layout service when available, otherwise calculate it
+            const branchDirection = childBranchConnection.direction || 
+                                    (childBranchData.direction || 
+                                    (childBranchData.xPosition > xPosition ? 'right' : 'left'));
             
             // Add branch point node - ENSURE perfect X alignment with parent branch
             flowNodes.push({
@@ -767,7 +861,9 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
                 isActive: isActive,
                 isOnActivePath: isActive && activeBranches.has(childBranchConnection.childBranchId),
                 childBranchName: childBranchData.branch.name || 'Branch',
-                childBranchDirection: branchDirection
+                childBranchDirection: branchDirection,
+                childCount: childBranchData.branch.metadata?.siblingCount || 1,
+                siblingIndex: childBranchData.branch.metadata?.siblingIndex || 0
               }
             });
             
@@ -813,6 +909,8 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
                 strokeOpacity: activeBranches.has(childBranchConnection.childBranchId) ? 1 : 0.85,
                 strokeLinecap: 'round' as const,
                 opacity: activeBranches.has(childBranchConnection.childBranchId) ? 1 : 0.85,
+                // Add smooth curve effect for a more subway-like appearance
+                strokeDasharray: activeBranches.has(childBranchConnection.childBranchId) ? undefined : '0',
               }
             });
             
@@ -898,48 +996,129 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
     });
     
     return { nodes: flowNodes, edges: flowEdges };
-  }, [currentBranchId]);
+  }, [currentBranchId, layoutData]);
   
-  // Fetch data effect
+  // Fetch layout data for branch positions
+  const fetchLayoutData = useCallback(async () => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      const response = await fetch(`/api/projects/${projectId}/layout`, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch layout data: ${response.status}`);
+      }
+      
+      const layoutInfo = await response.json();
+      
+      // Transform layout data into a map keyed by branch ID
+      const layoutMap: Record<string, BranchLayout> = {};
+      layoutInfo.forEach((item: any) => {
+        if (item.layout) {
+          layoutMap[item.id] = item.layout;
+        }
+      });
+      
+      setLayoutData(layoutMap);
+      return layoutMap;
+    } catch (error) {
+      console.error('Error fetching layout data:', error);
+      // Don't set error state here to avoid re-renders
+      return null;
+    }
+  }, [projectId]);
+  
+  // Function to fetch data and update the flow
+  const fetchDataAndUpdateFlow = useCallback(async () => {
+    console.log('Fetching data for minimap, project:', projectId);
+    if (!projectId) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // Fetch all branches for this project
+      const branchesResponse = await fetch(`/api/projects/${projectId}/branches`);
+      if (!branchesResponse.ok) {
+        throw new Error(`Failed to fetch branches: ${branchesResponse.status}`);
+      }
+      const branches = await branchesResponse.json();
+      
+      // Fetch all nodes for this project
+      const nodesResponse = await fetch(`/api/nodes?project_id=${projectId}&limit=1000`);
+      if (!nodesResponse.ok) {
+        throw new Error(`Failed to fetch nodes: ${nodesResponse.status}`);
+      }
+      const nodes = await nodesResponse.json();
+      
+      console.log(`Received ${nodes.length} timeline nodes and ${branches.length} branches`);
+      
+      const { nodes: flowNodes, edges: flowEdges } = transformDataToReactFlow(nodes, branches);
+      
+      setNodes(flowNodes);
+      setEdges(flowEdges);
+    } catch (error) {
+      console.error('Failed to fetch minimap data:', error);
+      setError(error instanceof Error ? error.message : 'Unknown error');
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, transformDataToReactFlow]);
+  
+  // Recalculate layout for all branches
+  const recalculateLayout = useCallback(async () => {
+    try {
+      setLoading(true);
+      
+      const response = await fetch(`/api/projects/${projectId}/layout`, {
+        method: 'POST',
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to recalculate layout');
+      }
+      
+      // Fetch the updated layout data
+      await fetchLayoutData();
+      
+      // Reload branches and nodes data
+      await fetchDataAndUpdateFlow();
+    } catch (error) {
+      console.error('Error recalculating layout:', error);
+      setError('Failed to recalculate branch layout');
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, fetchLayoutData, fetchDataAndUpdateFlow]);
+  
+  // Fetch data effect - modified to use layout service
   useEffect(() => {
-    const fetchData = async () => {
-      console.log('Fetching data for minimap, project:', projectId);
+    const initialLoad = async () => {
       if (!projectId) return;
       
       setLoading(true);
       setError(null);
       
       try {
-        // Fetch all branches for this project
-        const branchesResponse = await fetch(`/api/projects/${projectId}/branches`);
-        if (!branchesResponse.ok) {
-          throw new Error(`Failed to fetch branches: ${branchesResponse.status}`);
-        }
-        const branches = await branchesResponse.json();
-        
-        // Fetch all nodes for this project
-        const nodesResponse = await fetch(`/api/nodes?project_id=${projectId}&limit=1000`);
-        if (!nodesResponse.ok) {
-          throw new Error(`Failed to fetch nodes: ${nodesResponse.status}`);
-        }
-        const nodes = await nodesResponse.json();
-        
-        console.log(`Received ${nodes.length} timeline nodes and ${branches.length} branches`);
-        
-        const { nodes: flowNodes, edges: flowEdges } = transformDataToReactFlow(nodes, branches);
-        
-        setNodes(flowNodes);
-        setEdges(flowEdges);
+        // First try to fetch layout data
+        await fetchLayoutData();
+        // Then load all data
+        await fetchDataAndUpdateFlow();
       } catch (error) {
-        console.error('Failed to fetch minimap data:', error);
-        setError(error instanceof Error ? error.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
+        console.error('Error during initial data load:', error);
+        setError('Failed to load subway map data');
+      } finally {
+        setLoading(false);
+      }
     };
     
-    fetchData();
-  }, [projectId, transformDataToReactFlow]);
+    initialLoad();
+  }, [projectId, fetchLayoutData, fetchDataAndUpdateFlow]);
   
   // Handle node selection
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
@@ -948,34 +1127,55 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
     }
   }, [onSelectBranch]);
   
-  // Center view on the active branch when it changes
-//   useEffect(() => {
-//     if (!loading && reactFlowInstance) {
-//       // Zoom to fit all nodes with a little padding
-//       reactFlowInstance.fitView({ padding: 0.2, includeHiddenNodes: false });
-      
-//       // If we have a current branch, try to center on it
-//       if (currentBranchId) {
-//         // Find a node in the current branch
-//         const branchNode = nodes.find(node => 
-//           node.data.branchId === currentBranchId
-//         );
+  // Add automatic recalculation when nodes or branches change
+  useEffect(() => {
+    const checkForLayoutRecalculation = async () => {
+      // Only auto-recalculate if:
+      // 1. We have nodes loaded
+      // 2. We don't have layout data for some branches
+      // 3. We haven't exceeded max retry attempts (3)
+      if (nodes.length > 0 && recalculationAttempts < 3) {
+        // Find branches without layout data, excluding ones that previously failed
+        const branchIdsWithoutLayout = nodes
+          .filter(node => node.data.branchId)
+          .map(node => node.data.branchId)
+          .filter((id, index, self) => self.indexOf(id) === index) // unique only
+          .filter(id => !layoutData || !layoutData[id]) // no layout data
+          .filter(id => !failedBranchIds.has(id)); // not previously failed
         
-//         if (branchNode) {
-//           // Center on this branch's x-position, keeping the vertical position
-//           const centerY = reactFlowInstance.getViewport().y;
-//           reactFlowInstance.setCenter(branchNode.position.x, centerY, { 
-//             zoom: 0.85, // Slightly zoomed in for better visibility
-//             duration: 800 
-//           });
-//         }
-//       }
-//     }
-//   }, [currentBranchId, loading, nodes, reactFlowInstance]);
+        // If we found branches without layout data, trigger a recalculation
+        if (branchIdsWithoutLayout.length > 0) {
+          console.log(`Found ${branchIdsWithoutLayout.length} branches without layout data, recalculating...`);
+          
+          try {
+            setRecalculationAttempts(prev => prev + 1);
+            await recalculateLayout();
+          } catch (error) {
+            console.error("Layout recalculation failed:", error);
+            
+            // Mark these branches as failed to prevent retry
+            const newFailedBranchIds = new Set(failedBranchIds);
+            branchIdsWithoutLayout.forEach(id => newFailedBranchIds.add(id));
+            setFailedBranchIds(newFailedBranchIds);
+            
+            // Show a non-blocking error
+            console.warn("Unable to calculate layout automatically. You can try manual recalculation.");
+          }
+        }
+      } else if (recalculationAttempts >= 3) {
+        console.warn("Maximum automatic layout recalculation attempts reached. Try manual recalculation.");
+      }
+    };
+    
+    // Run the check when nodes are updated
+    if (nodes.length > 0) {
+      checkForLayoutRecalculation();
+    }
+  }, [nodes, layoutData, recalculateLayout, recalculationAttempts, failedBranchIds]);
   
   // Loading state
   if (loading && nodes.length === 0) {
-                return (
+    return (
       <div className="flex flex-col items-center justify-center h-full p-4">
         <div className="subway-loading-animation mb-6">
           <div className="subway-line"></div>
@@ -1010,8 +1210,8 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
       });
     }
   });
-                
-                return (
+  
+  return (
     <div className="h-full w-full relative">
       <style jsx global>{`
         /* Custom subway-themed background */
@@ -1106,6 +1306,25 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
         }
       `}</style>
       
+      {/* Recalculate layout button */}
+      <div className="absolute top-4 left-4 z-10">
+        <button
+          className={cn(
+            "bg-white p-2 rounded-md shadow-sm border border-gray-200 text-xs text-muted-foreground hover:bg-gray-50 transition-colors",
+            loading ? "opacity-70 cursor-not-allowed" : ""
+          )}
+          onClick={recalculateLayout}
+          disabled={loading}
+          title="Recalculate branch layout"
+        >
+          <RefreshCw 
+            size={16} 
+            className={loading ? "animate-spin" : ""} 
+          />
+          {loading && <span className="sr-only">Calculating layout...</span>}
+        </button>
+      </div>
+      
       {/* Branch legend toggle button */}
       <div className="absolute top-4 right-4 z-10">
         <button
@@ -1125,7 +1344,7 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
             {Array.from(branchColors.entries()).map(([branchId, { color, name }]) => (
               <div 
                 key={branchId}
-                              className={cn(
+                className={cn(
                   "flex items-center py-1 px-2 text-xs rounded-sm cursor-pointer transition-colors",
                   branchId === currentBranchId ? "bg-gray-100" : "hover:bg-gray-50"
                 )}
@@ -1141,9 +1360,9 @@ export function Minimap({ projectId, currentBranchId, onSelectBranch }: MinimapP
                 {branchId === currentBranchId && (
                   <div className="ml-auto">
                     <div className="w-2 h-2 rounded-full bg-primary" />
-          </div>
-        )}
-      </div>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>

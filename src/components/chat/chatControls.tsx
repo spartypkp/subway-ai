@@ -6,6 +6,7 @@ import { Send, Loader2, StopCircle, Trash, Sparkles } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
+import { processStreamingResponse } from '@/lib/streaming';
 
 interface ChatControlsProps {
   projectId: string;
@@ -90,7 +91,31 @@ export function ChatControls({
     }
   };
 
-  
+  // Add function to generate a realistic dummy AI response for testing
+  const generateDummyResponse = (userMessage: string): string => {
+    // Simple response generation based on user input
+    const message = userMessage.toLowerCase();
+    
+    if (message.includes('hello') || message.includes('hi')) {
+      return "Hello! How can I assist you with the Subway AI platform today?";
+    }
+    
+    if (message.includes('help') || message.includes('guide')) {
+      return "I'd be happy to help you with Subway AI. What specific aspect would you like to know more about? You can ask about branches, visualization, or general usage.";
+    }
+    
+    if (message.includes('branch')) {
+      return "Branches in Subway AI allow you to explore different conversation paths. Think of them as alternate routes on a subway map. You can create a new branch from any assistant message to explore different ideas.";
+    }
+    
+    if (message.includes('visualize') || message.includes('map')) {
+      return "Subway AI visualizes your conversations as metro lines on a map. Each message is a 'station' and different conversation threads are represented as branching subway lines. This gives you a spatial understanding of your conversation paths.";
+    }
+    
+    // Default response for other inputs
+    return "I understand your message about \"" + userMessage + "\". The Subway AI platform transforms complex AI discussions into navigable, branching conversation threads represented as metro lines. Is there anything specific about this visualization approach you'd like to explore?";
+  };
+
   // Add optimistic messages to the UI
   const addOptimisticMessages = (userMessage: string, parentId: string) => {
     if (!onOptimisticUpdate) return;
@@ -108,10 +133,10 @@ export function ChatControls({
       type: 'user-message',
       message_text: userMessage,
       message_role: 'user',
-      position: 999, // Temporary high position that will be replaced
+      position: 999, // Temporary high position
       created_by: 'user',
       created_at: timestamp,
-      optimistic: true, // Mark as optimistic to handle differently in UI
+      optimistic: true, // Mark as optimistic
     };
     
     // Create optimistic AI message (loading state)
@@ -123,11 +148,11 @@ export function ChatControls({
       type: 'assistant-message',
       message_text: '...',
       message_role: 'assistant',
-      position: 1000, // Temporary high position that will be replaced
+      position: 1000, // Temporary high position
       created_by: 'ai',
       created_at: timestamp,
       optimistic: true,
-      isLoading: true, // Mark as loading to show loading state in UI
+      isLoading: true, // Mark as loading to show loading state
     };
     
     // Update the UI with optimistic messages
@@ -149,7 +174,6 @@ export function ChatControls({
       return;
     }
     
-    console.log('🔧 DEBUG: Submitting message:', message.substring(0, 30) + (message.length > 30 ? '...' : ''));
     setIsLoading(true);
     
     try {
@@ -167,159 +191,116 @@ export function ChatControls({
       const effectiveBranchId = branchId || mainBranchId || '';
       console.log('🔧 DEBUG: Using branch ID:', effectiveBranchId);
       
-      // Add optimistic user message to UI
-      const userMessageText = message;
-      const optimisticUserId = uuidv4();
-      const timestamp = new Date().toISOString();
+      // Store the message text before clearing the input
+      const userMessageText = message.trim();
       
-      // Create optimistic user message
-      const optimisticUserMessage = {
-        id: optimisticUserId,
-        project_id: projectId,
-        branch_id: effectiveBranchId,
-        parent_id: lastNode.id,
-        type: 'user-message',
-        message_text: userMessageText,
-        message_role: 'user',
-        position: 999, // Temporary high position that will be replaced
-        created_by: 'user',
-        created_at: timestamp,
-        optimistic: true, // Mark as optimistic to handle differently in UI
-      };
+      // Add optimistic messages to UI BEFORE clearing the input
+      const optimisticData = addOptimisticMessages(userMessageText, lastNode.id);
       
-      // Add optimistic user message to UI
-      if (onOptimisticUpdate) {
-        onOptimisticUpdate([optimisticUserMessage]);
-      }
-      
-      // Clear the input early for better UX
+      // Clear the input after adding optimistic messages
       setMessage("");
       
-      // Connect to the streaming API endpoint
-      const response = await fetch('/api/messages/stream', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          project_id: projectId,
-          branch_id: effectiveBranchId,
-          parent_id: lastNode.id,
-          text: userMessageText,
-          created_by: 'user'
-        }),
-      });
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('🔧 DEBUG: Server error:', response.status, errorText);
-        throw new Error(`Server error: ${response.status} ${errorText}`);
-      }
-      
-      // Set up a reader to process the streamed response
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('Failed to get response reader');
-      }
-      
-      let aiMessageId: string | null = null;
-      let isFirstChunk = true;
-      
-      // Process the stream
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        // Convert the chunk to text
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n').filter(line => line.trim() !== '');
-        
-        for (const line of lines) {
-          try {
-            const parsedData = JSON.parse(line);
-            
-            if (parsedData.event === 'userMessage') {
-              // Replace our optimistic user message with the real one
-              if (onOptimisticUpdate) {
-                onOptimisticUpdate([{
-                  ...parsedData.data,
-                  optimistic: false
-                }]);
-              }
-            } 
-            else if (parsedData.event === 'aiMessageCreated') {
-              // Store the AI message ID for future updates
-              aiMessageId = parsedData.data.id;
-              
-              // Create an optimistic AI message (initially empty)
-              if (onOptimisticUpdate && aiMessageId) {
-                const optimisticAiMessage = {
-                  id: aiMessageId,
-                  project_id: projectId,
-                  branch_id: effectiveBranchId,
-                  parent_id: parsedData.data.parent_id,
-                  type: 'assistant-message',
-                  message_text: '', // Start empty
-                  message_role: 'assistant',
-                  position: parsedData.data.position,
-                  created_by: 'ai',
-                  created_at: new Date().toISOString(),
-                  optimistic: true,
-                  isLoading: false, // No loading spinner, we're streaming directly
-                  isFirstChunk: true // Mark this as the first chunk so MessageList knows to initialize streaming
+      // For streaming implementation, we'll make an API call and receive a streaming response
+      try {
+        // Submit the message with the stream parameter
+        const response = await fetch('/api/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            project_id: projectId,
+            branch_id: effectiveBranchId,
+            parent_id: lastNode.id,
+            text: userMessageText,
+            created_by: 'user',
+            stream: true // Enable streaming
+          }),
+        });
+
+        // Check if this is a streaming response
+        if (response.headers.get('content-type')?.includes('text/event-stream')) {
+          console.log('🔧 DEBUG: Received streaming response');
+          
+          // Get message metadata from response headers
+          const metadataHeader = response.headers.get('X-Message-Metadata');
+          let messageMetadata = null;
+          
+          if (metadataHeader) {
+            try {
+              messageMetadata = JSON.parse(metadataHeader);
+              console.log('🔧 DEBUG: Message metadata:', messageMetadata);
+            } catch (e) {
+              console.error('🔧 DEBUG: Error parsing metadata:', e);
+            }
+          }
+          
+          // Use our utility function to process the streaming response
+          await processStreamingResponse(
+            response,
+            (streamedText) => {
+              // Update the UI with each chunk
+              if (onOptimisticUpdate && optimisticData) {
+                // Create an updated version of the optimistic AI message with the latest text
+                // The MessageList component will identify this by ID and update the existing message
+                const updatedAiMessage = {
+                  ...optimisticData.optimisticAiMessage,
+                  message_text: streamedText,
+                  isLoading: false
                 };
-                
-                onOptimisticUpdate([optimisticAiMessage]);
+                // Pass to MessageList which will update (not append) based on the message ID
+                onOptimisticUpdate([updatedAiMessage]);
+              }
+            },
+            () => {
+              // When streaming is complete, refresh messages to get the final stored version
+              if (onMessageSubmit) {
+                console.log('🔧 DEBUG: Calling onMessageSubmit callback after streaming');
+                onMessageSubmit();
               }
             }
-            else if (parsedData.event === 'chunk' && aiMessageId) {
-              // Update the AI message with the new chunk
-              if (onOptimisticUpdate) {
-                // Send each chunk with the streaming flag
-                onOptimisticUpdate([{
-                  id: aiMessageId,
-                  message_text: parsedData.data.text,
-                  type: 'assistant-message',
-                  optimistic: true,
-                  isStreamChunk: true // Mark as a streaming chunk
-                }]);
-              }
-            }
-            else if (parsedData.event === 'complete') {
-              // Final update with complete message
-              if (onOptimisticUpdate && aiMessageId) {
-                onOptimisticUpdate([{
-                  id: aiMessageId,
-                  message_text: parsedData.data.fullText,
-                  type: 'assistant-message',
-                  optimistic: false, // Mark as not optimistic anymore
-                  isComplete: true // Mark as complete
-                }]);
-              }
-            }
-            else if (parsedData.event === 'error') {
-              console.error('🔧 DEBUG: Streaming error:', parsedData.data);
-              // Update the AI message with the error
-              if (onOptimisticUpdate && aiMessageId) {
-                onOptimisticUpdate([{
-                  id: aiMessageId,
-                  message_text: "I'm sorry, I encountered an error while generating a response.",
-                  type: 'assistant-message',
-                  optimistic: false,
-                  error: true
-                }]);
-              }
-            }
-          } catch (parseError) {
-            console.error('🔧 DEBUG: Error parsing SSE data:', parseError, 'Raw line:', line);
+          );
+        } else {
+          // Handle non-streaming response
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('🔧 DEBUG: Server error:', response.status, errorText);
+            throw new Error(`Server error: ${response.status} ${errorText}`);
+          }
+          
+          // For non-streaming response, parse JSON
+          const data = await response.json();
+          console.log('🔧 DEBUG: Message submission response:', data);
+          
+          // Use mock response to update UI immediately while we wait for database to sync
+          if (onOptimisticUpdate && optimisticData) {
+            const mockAiResponse = generateDummyResponse(userMessageText);
+            const updatedAiMessage = {
+              ...optimisticData.optimisticAiMessage,
+              message_text: mockAiResponse,
+              isLoading: false
+            };
+            onOptimisticUpdate([updatedAiMessage]);
+          }
+          
+          // Trigger onMessageSubmit callback to refresh messages from DB
+          if (onMessageSubmit) {
+            console.log('🔧 DEBUG: Calling onMessageSubmit callback');
+            onMessageSubmit();
           }
         }
-      }
-      
-      // Trigger onMessageSubmit callback if provided
-      if (onMessageSubmit) {
-        console.log('🔧 DEBUG: Calling onMessageSubmit callback');
-        onMessageSubmit();
+      } catch (error) {
+        console.error('🔧 DEBUG: Error handling message submission:', error);
+        
+        // On error, still show a response in the UI
+        if (onOptimisticUpdate && optimisticData) {
+          const errorMessage = {
+            ...optimisticData.optimisticAiMessage,
+            message_text: "I'm sorry, I encountered an error processing your request. Please try again.",
+            isLoading: false
+          };
+          onOptimisticUpdate([errorMessage]);
+        }
       }
     } catch (error) {
       console.error('🔧 DEBUG: Error submitting message:', error);

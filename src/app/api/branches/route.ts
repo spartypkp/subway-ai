@@ -1,6 +1,7 @@
 import { query } from '@/lib/db';
 import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
+import SubwayLayoutService from '@/lib/layout/subwayLayoutService';
 
 /**
  * API endpoint for creating new branches from existing messages
@@ -15,15 +16,15 @@ export async function POST(req: Request) {
       parent_branch_id, 
       branch_point_node_id, 
       name, 
-      color = '#6366f1', // Default to indigo if no color provided
-      created_by = 'anonymous', // Default user ID if not provided
+      color,
+      created_by = 'system',
       depth
     } = body;
 
     // Validate required fields
-    if (!project_id || !branch_point_node_id || !parent_branch_id) {
+    if (!project_id || !parent_branch_id || !branch_point_node_id) {
       return NextResponse.json(
-        { error: 'Missing required fields: project_id, parent_branch_id, and branch_point_node_id are required' },
+        { error: 'Missing required fields: project_id, parent_branch_id, branch_point_node_id' },
         { status: 400 }
       );
     }
@@ -46,6 +47,33 @@ export async function POST(req: Request) {
       // Calculate depth or use provided value
       const parentDepth = branchCheck.rows[0].depth;
       const branchDepth = depth !== undefined ? depth : parentDepth + 1;
+
+      // If no color is provided, determine the best color based on depth and siblings
+      let branchColor = color;
+      if (!branchColor) {
+        // Get a list of colors already used by siblings (branches with same parent and depth)
+        const usedColorsResult = await query(
+          'SELECT color FROM branches WHERE parent_branch_id = $1 AND depth = $2',
+          [parent_branch_id, branchDepth]
+        );
+        
+        const usedColors = usedColorsResult.rows.map(row => row.color);
+        
+        // Define available colors palette
+        const colorPalette = [
+          '#ef4444', // red-500
+          '#10b981', // emerald-500
+          '#f59e0b', // amber-500
+          '#8b5cf6', // violet-500
+          '#ec4899', // pink-500
+          '#06b6d4', // cyan-500
+          '#84cc16', // lime-500
+          '#6366f1', // indigo-500 (current default, moved to end)
+        ];
+        
+        // Find first color not already used by siblings
+        branchColor = colorPalette.find(color => !usedColors.includes(color)) || colorPalette[branchDepth % colorPalette.length];
+      }
 
       // Check that branch point node exists and is valid for branching
       const nodeCheck = await query(
@@ -101,12 +129,12 @@ export async function POST(req: Request) {
       const branchResult = await query(
         `INSERT INTO branches (
           id, project_id, parent_branch_id, branch_point_node_id,
-          name, color, depth, created_by, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+          name, color, depth, created_by, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
         RETURNING *`,
         [
           branchId, project_id, parent_branch_id, branchPointNodeId,
-          branchName, color, branchDepth, created_by
+          branchName, branchColor, branchDepth, created_by
         ]
       );
 
@@ -138,6 +166,15 @@ export async function POST(req: Request) {
         WHERE timeline_nodes.id = new_positions.id`,
         [parent_branch_id]
       );
+
+      // Calculate and update branch layouts
+      const layoutService = new SubwayLayoutService();
+      try {
+        await layoutService.updateBranchPositions(project_id);
+      } catch (layoutError) {
+        console.warn('Branch layout calculation failed but proceeding with branch creation', layoutError);
+        // Non-critical error - continue with branch creation even if layout fails
+      }
 
       // Commit transaction
       await query('COMMIT');

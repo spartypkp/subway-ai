@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from "react";
 import { ProjectDialog } from "@/components/projectDialog";
 import { Minimap } from "@/components/minimap";
 import { ChatControls } from "@/components/chat/chatControls";
-import { MessageList } from "@/components/chat/messageList";
+import { MessageList, MessageListRef } from "@/components/chat/messageList";
 import { Button } from "@/components/ui/button";
 import { 
 	PlusIcon, 
@@ -13,7 +13,8 @@ import {
 	Train, 
 	GitBranch, 
 	Map,
-	ChevronDown
+	ChevronDown,
+	Trash2
 } from "lucide-react";
 import { Project } from "@/lib/types/database";
 import { H1 } from "@/components/ui/typography";
@@ -26,12 +27,23 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { TimelineNode } from "@/lib/types/database";
 import { ReactFlowProvider } from "reactflow";
 
 export default function Home() {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 	const [projects, setProjects] = useState<Project[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -127,6 +139,40 @@ export default function Home() {
 		}
 	};
 
+	const handleDeleteProject = async () => {
+		if (!selectedProjectId) return;
+		
+		try {
+			const response = await fetch(`/api/projects/${selectedProjectId}`, {
+				method: "DELETE",
+			});
+
+			if (!response.ok) throw new Error("Failed to delete project");
+
+			// Remove the deleted project from the projects array
+			const updatedProjects = projects.filter(p => p.id !== selectedProjectId);
+			setProjects(updatedProjects);
+			
+			// Select another project if available, otherwise set to null
+			if (updatedProjects.length > 0) {
+				setSelectedProjectId(updatedProjects[0].id);
+			} else {
+				setSelectedProjectId(null);
+			}
+			
+			// Reset branch state
+			setCurrentBranchId(null);
+			setMainBranchId(null);
+			
+			// Close the delete dialog
+			setIsDeleteDialogOpen(false);
+			
+			console.log('🔍 DEBUG: Project deleted successfully');
+		} catch (error) {
+			console.error("Error deleting project:", error);
+		}
+	};
+
 	const handleBranchSelect = (branchId: string) => {
 		console.log('🔍 DEBUG: Branch selected:', branchId);
 		
@@ -149,50 +195,27 @@ export default function Home() {
 	// Safety check to ensure we always have a valid string for projectId
 	const safeProjectId = selectedProjectId || '';
 
-	// Update the messageListRef definition to match the forwardRef type from MessageList component
-	const messageListRef = useRef<{ handleOptimisticUpdate: (msgs: TimelineNode[]) => void }>(null);
-
 	// Add function to handle optimistic message updates
 	const handleOptimisticUpdate = (newMessages: TimelineNode[]) => {
-		console.log('🔍 DEBUG: Handling optimistic update with messages:', newMessages.length);
+		// Process all messages, not just AI messages
+		// This ensures both user and assistant messages are properly handled
 		
-		// Pass ALL messages to the MessageList component's handleOptimisticUpdate function
-		if (messageListRef.current) {
+		// First, pass all messages to the MessageList component
+		if (messageListRef.current && messageListRef.current.handleOptimisticUpdate) {
 			messageListRef.current.handleOptimisticUpdate(newMessages);
-		} else {
-			console.warn('🔍 DEBUG: messageListRef is null, cannot update MessageList');
 		}
-
-		// Find the AI message from the optimistic update for streaming simulation
+		
+		// Then, handle streaming content for AI messages
 		const aiMessage = newMessages.find(msg => msg.type === 'assistant-message');
 		if (aiMessage) {
-			// Start with empty content for streaming effect
-			setStreamingContent('');
-			
-			// In a real implementation, this would connect to a streaming API
-			// For now, we'll simulate streaming with a simple timer that adds text gradually
-			const fullResponse = aiMessage.message_text || '';
-			let currentText = '';
-			const words = fullResponse.split(' ');
-			
-			// Clear any existing interval
-			const intervalId = setInterval(() => {
-				if (words.length === 0) {
-					clearInterval(intervalId);
-					return;
-				}
-				
-				// Add the next word
-				currentText += (currentText ? ' ' : '') + words.shift();
-				setStreamingContent(currentText);
-				
-				// When done, clear the interval
-				if (words.length === 0) {
-					clearInterval(intervalId);
-				}
-			}, 100); // Adjust timing as needed
+			// For real streaming implementation, we don't need to simulate word-by-word display
+			// The streaming will be handled by the backend and the UI will update as chunks arrive
+			setStreamingContent(aiMessage.message_text || '');
 		}
 	};
+
+	// Reference to the MessageList component to access its handleOptimisticUpdate method
+	const messageListRef = useRef<MessageListRef>(null);
 
 	return (
 		<main className="flex flex-col h-screen max-h-screen bg-background">
@@ -353,14 +376,28 @@ export default function Home() {
 						</DropdownMenu>
 					)}
 					
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={() => setIsCreateDialogOpen(true)}
-					>
-						<PlusIcon className="h-4 w-4 mr-2" />
-						New Project
-					</Button>
+					<div className="flex items-center gap-2">
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setIsCreateDialogOpen(true)}
+							className="flex items-center"
+						>
+							<PlusIcon className="h-4 w-4 mr-2" />
+							New Project
+						</Button>
+						
+						{selectedProjectId && (
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => setIsDeleteDialogOpen(true)}
+								className="text-destructive hover:bg-destructive/10 border-destructive/20"
+							>
+								<Trash2 className="h-4 w-4" />
+							</Button>
+						)}
+					</div>
 				</div>
 			</header>
 			
@@ -422,6 +459,7 @@ export default function Home() {
 										onBranchCreated={(newBranchId: string) => setCurrentBranchId(newBranchId)}
 										onBranchSwitch={handleBranchSelect}
 										streamingContent={streamingContent}
+										onOptimisticUpdate={handleOptimisticUpdate}
 									/>
 								</div>
 								
@@ -462,6 +500,28 @@ export default function Home() {
 				onClose={() => setIsCreateDialogOpen(false)}
 				onCreate={handleCreateProject}
 			/>
+			
+			{/* Delete Project Confirmation Dialog */}
+			<AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Delete Project</AlertDialogTitle>
+						<AlertDialogDescription>
+							Are you sure you want to delete "{selectedProject?.name}"? This action cannot be undone.
+							All conversations and branches in this project will be permanently deleted.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction 
+							onClick={handleDeleteProject}
+							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+						>
+							Delete
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</main>
 	);
 }

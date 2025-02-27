@@ -110,7 +110,7 @@ export interface Branch {
 	is_active: boolean;
 	created_at: string;
 	created_by: string;
-	metadata: Record<string, any> | null;
+	metadata?: Record<string, any> | null;
 	// Additional fields from joins
 	parent_branch_name?: string;
 	parent_branch_color?: string;
@@ -139,10 +139,6 @@ export type NodeStatus = 'active' | 'archived' | 'hidden' | 'featured';
 export interface OptimisticProps {
 	optimistic?: boolean;
 	isLoading?: boolean;
-	isStreamChunk?: boolean;
-	isFirstChunk?: boolean;
-	isComplete?: boolean;
-	error?: boolean;
 }
 
 // Base TimelineNode interface
@@ -220,4 +216,5 @@ export interface Branch {
 	branch_point_id?: string;
 	branch_parent_message_id?: string;
 	child_branch_count?: number;
+	metadata?: Record<string, any> | null;
 } 
