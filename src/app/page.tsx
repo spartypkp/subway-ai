@@ -18,7 +18,9 @@ import {
 	GitBranch, 
 	Map,
 	ChevronDown,
-	Trash2
+	Trash2,
+	ArrowLeftCircle,
+	ArrowRightCircle
 } from "lucide-react";
 import { Project, TimelineNode } from "@/lib/types/database";
 import { H1 } from "@/components/ui/typography";
@@ -63,6 +65,7 @@ export default function Home() {
 	const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 	const [branchReason, setBranchReason] = useState('');
 	const [creatingBranch, setCreatingBranch] = useState(false);
+	const [branchDirection, setBranchDirection] = useState<'left' | 'right' | 'auto'>('auto');
 	
 	// Get project data from ProjectContext
 	const { 
@@ -133,8 +136,14 @@ export default function Home() {
 	};
 	
 	// Handle branch creation from a message
-	const handleBranchClick = (messageId: string) => {
+	const handleBranchClick = (messageId: string, direction?: 'left' | 'right' | 'auto') => {
 		setSelectedMessageId(messageId);
+		// Store the selected direction if provided
+		if (direction) {
+			setBranchDirection(direction);
+		} else {
+			setBranchDirection('auto');
+		}
 		setBranchDialogOpen(true);
 	};
 
@@ -147,8 +156,8 @@ export default function Home() {
 			const newBranchId = await createBranch({
 				branchPointNodeId: selectedMessageId as string,
 				name: branchReason || undefined,
-				createdBy: 'user'
-               
+				createdBy: 'user',
+				direction: branchDirection
 			});
 
 			// Reset dialog state
@@ -457,9 +466,9 @@ export default function Home() {
 			<Dialog open={branchDialogOpen} onOpenChange={setBranchDialogOpen}>
 				<DialogContent className="max-w-md">
 					<DialogHeader>
-						<DialogTitle>Create a new subway branch</DialogTitle>
+						<DialogTitle>Create a new {branchDirection === 'left' ? 'left' : 'right'} branch</DialogTitle>
 						<DialogDescription>
-							Create a new conversation branch from this point. This allows you to explore a different direction without losing the original conversation.
+							Create a new conversation branch that splits {branchDirection === 'left' ? 'left' : 'right'} from this point. This allows you to explore a different direction without losing the original conversation.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-4 py-4">
@@ -487,7 +496,10 @@ export default function Home() {
 								<>Creating<span className="animate-pulse">...</span></>
 							) : (
 								<>
-									<GitBranch className="h-4 w-4 mr-1" />
+									{branchDirection === 'left' ? 
+										<ArrowLeftCircle className="h-4 w-4 mr-1" /> : 
+										<ArrowRightCircle className="h-4 w-4 mr-1" />
+									}
 									Create Branch
 								</>
 							)}

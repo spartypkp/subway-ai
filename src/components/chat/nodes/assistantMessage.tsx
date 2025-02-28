@@ -1,8 +1,14 @@
 import React from 'react';
-import { Bot, GitBranch, Sparkles, SwitchCamera } from 'lucide-react';
+import { Bot, GitBranch, Sparkles, SwitchCamera, ArrowLeftCircle, ArrowRightCircle, Circle, GitBranchIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
 import { cn } from '@/lib/utils';
 import { TimelineNode } from '@/lib/types/database';
 import { TrackSegment } from './trackSegment';
@@ -16,7 +22,7 @@ interface AssistantMessageProps {
     branchColor: string;
     stationNumber: number;
     onMessageSelect: (messageId: string) => void;
-    onBranchClick: (messageId: string, yValue: number) => void;
+    onBranchClick: (messageId: string, direction?: 'left' | 'right' | 'auto') => void;
     hasBranchOptions?: boolean;
     branchPointInfo?: BranchPointInfo;
     getBranchSwitchTarget?: (branchPointInfo: BranchPointInfo | undefined, currentBranchId: string | null) => any;
@@ -82,14 +88,14 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
             data-streaming={isStreaming ? 'true' : 'false'}
         >
             {/* Track segment above message */}
-            <TrackSegment 
-                color={branchColor} 
+            <TrackSegment
+                color={branchColor}
                 position="above"
                 height="20px"
             />
 
             <div className="relative w-full">
-                
+
                 {hasBranchOptions && branchPointInfo && getBranchSwitchTarget && (
                     <div className="absolute left-1/2 top-1/2 transform -translate-y-1/2 z-0">
                         <div className="relative">
@@ -207,32 +213,85 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
                             )}
                         </div>
 
-                        {/* Branch button - only show for non-streaming messages */}
-                        {!isStreaming && (
+
+                    </div>
+                </Card>
+                {/* Branch buttons with disabled states */}
+                {!isStreaming && (
+                    <div className="flex items-center justify-between gap-2">
+                        {branchPointInfo?.branches?.left && (
                             <TooltipProvider>
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <Button
                                             variant="ghost"
                                             size="sm"
-                                            className="h-6 px-2 text-xs hover:bg-background rounded-full border border-transparent hover:border-muted"
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                onBranchClick(node.id, node.metadata?.y_value || 0);
+                                                onBranchClick(node.id, 'left');
                                             }}
+                                            className={cn(
+                                                "h-6 w-6 p-0 rounded-full",
+                                                branchPointInfo?.branches?.left
+                                                    ? "opacity-40 cursor-not-allowed"
+                                                    : "hover:bg-background hover:border border-muted"
+                                            )}
+                                            disabled={!!branchPointInfo?.branches?.left}
                                         >
-                                            <GitBranch className="h-3 w-3 mr-1" />
-                                            Branch
+                                            <div className="flex items-center gap-1">
+                                                <ArrowLeftCircle className="h-3.5 w-3.5" />
+                                                <span className="text-xs">New Branch</span>
+                                            </div>
                                         </Button>
                                     </TooltipTrigger>
-                                    <TooltipContent>
-                                        Create a new conversation branch from this point
+                                    <TooltipContent side="top">
+                                        {branchPointInfo?.branches?.left
+                                            ? "Branch already exists"
+                                            : "Branch left"}
+                                    </TooltipContent>
+                                </Tooltip>
+                            </TooltipProvider>
+                        )}
+
+
+                        {branchPointInfo?.branches?.right && (
+
+
+                            <TooltipProvider>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onBranchClick(node.id, 'right');
+                                            }}
+                                            className={cn(
+                                                "h-6 w-6 p-0 rounded-full",
+                                                branchPointInfo?.branches?.right
+                                                    ? "opacity-40 cursor-not-allowed"
+                                                    : "hover:bg-background hover:border border-muted"
+                                            )}
+                                            disabled={!!branchPointInfo?.branches?.right}
+                                        >
+                                            <div className="flex items-center gap-1">
+
+                                                <span className="text-xs">New Branch</span>
+                                                <ArrowRightCircle className="h-3.5 w-3.5" />
+                                            </div>
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top">
+                                        {branchPointInfo?.branches?.right
+                                            ? "Branch already exists"
+                                            : "Branch right"}
                                     </TooltipContent>
                                 </Tooltip>
                             </TooltipProvider>
                         )}
                     </div>
-                </Card>
+                )}
             </div>
 
             {/* Track segment below message */}

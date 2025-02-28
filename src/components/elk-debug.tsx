@@ -45,7 +45,7 @@ export function ElkDebug() {
   const handleRecalculate = async () => {
     try {
       setIsRecalculating(true);
-      await recalculateLayout();
+      await recalculateLayout('slot');
     } finally {
       // Ensure we clear the local loading state
       setTimeout(() => setIsRecalculating(false), 500);

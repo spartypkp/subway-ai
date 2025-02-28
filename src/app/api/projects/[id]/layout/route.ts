@@ -1,35 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
-import ElkLayoutService from '@/lib/layout/elkLayoutService';
-import SlotBasedLayoutService from '@/lib/layout/slotBasedLayoutService';
+import LayoutServiceFactory from '@/lib/layout/layoutServiceFactory';
+import { z } from 'zod';
+
+// Parameter validation schema
+const paramSchema = z.object({
+  id: z.string().uuid(),
+});
+
+// Query params validation schema
+const querySchema = z.object({
+  layoutType: z.enum(['slot', 'tree']).optional(),
+});
+
 /**
  * POST /api/projects/[id]/layout
  * 
  * Recalculates and updates the layout positions for all branches in a project
- * Uses the ElkLayoutService to apply tree-aware layout algorithms with better
+ * Uses the selected layout service to apply tree-aware layout algorithms with better
  * collision avoidance.
  * 
  * @param req NextRequest with project ID in params
  * @returns Updated layout information
  */
 export async function POST(
-  req: NextRequest,
+  request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const {id: projectId} = await params;
+    // Validate project ID parameter
+    const { id } = await params;
     
-    if (!projectId) {
-      return NextResponse.json(
-        { error: 'Project ID is required' },
-        { status: 400 }
-      );
-    }
+    // Parse query params
+    const url = new URL(request.url);
+    const layoutType = url.searchParams.get('layoutType') || 'tree';
+    const { layoutType: validatedLayoutType } = querySchema.parse({ 
+      layoutType: layoutType as 'slot' | 'tree' 
+    });
     
     // Check if project exists
     const projectResult = await query(
       'SELECT * FROM projects WHERE id = $1',
-      [projectId]
+      [id]
     );
     
     if (projectResult.rows.length === 0) {
@@ -39,10 +51,9 @@ export async function POST(
       );
     }
     
-    // Use ELK layout service to recalculate and update branch layouts
-    //const layoutService = new ElkLayoutService();
-    const layoutService = new SlotBasedLayoutService();
-    await layoutService.updateBranchPositions(projectId);
+    // Get appropriate layout service based on query parameter
+    const layoutService = LayoutServiceFactory.getLayoutService(validatedLayoutType);
+    await layoutService.updateBranchPositions(id);
     
     // Return success response
     return NextResponse.json(
@@ -61,46 +72,49 @@ export async function POST(
 /**
  * GET /api/projects/[id]/layout
  * 
- * Gets the current layout information for a project's branches
- * Returns only the layout-related metadata
- * 
- * @param req NextRequest with project ID in params
- * @returns Layout information for all branches
+ * Calculate and return the layout for a project's branches
  */
 export async function GET(
-  req: NextRequest,
+  request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const {id: projectId} = await params;
+    // Validate project ID parameter
+    const { id } = paramSchema.parse(params);
     
-    if (!projectId) {
-      return NextResponse.json(
-        { error: 'Project ID is required' },
-        { status: 400 }
-      );
-    }
+    // Parse query params
+    const url = new URL(request.url);
+    const layoutType = url.searchParams.get('layoutType') || 'tree';
+    const { layoutType: validatedLayoutType } = querySchema.parse({ 
+      layoutType: layoutType as 'slot' | 'tree' 
+    });
     
-    // Fetch all branches for the project
+    // Fetch project branches
     const branchesResult = await query(
-      'SELECT id, name, color, depth, metadata FROM branches WHERE project_id = $1',
-      [projectId]
+      'SELECT * FROM branches WHERE project_id = $1',
+      [id]
     );
     
-    // Extract layout information from each branch's metadata
-    const layoutInfo = branchesResult.rows.map(branch => ({
-      id: branch.id,
-      name: branch.name,
-      color: branch.color,
-      depth: branch.depth,
-      layout: branch.metadata?.layout || null
-    }));
+    // Fetch project timeline nodes
+    const nodesResult = await query(
+      'SELECT * FROM timeline_nodes WHERE project_id = $1',
+      [id]
+    );
     
-    return NextResponse.json(layoutInfo, { status: 200 });
+    // Get appropriate layout service based on query parameter
+    const layoutService = LayoutServiceFactory.getLayoutService(validatedLayoutType);
+    
+    // Calculate layout
+    const layoutResult = await layoutService.calculate(
+      branchesResult.rows,
+      nodesResult.rows
+    );
+    
+    return NextResponse.json(layoutResult);
   } catch (error) {
-    console.error('Error fetching layout information:', error);
+    console.error('Error calculating project layout:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch layout information' },
+      { error: 'Failed to calculate project layout' },
       { status: 500 }
     );
   }

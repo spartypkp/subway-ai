@@ -24,12 +24,26 @@ interface BranchRootNodeData extends BaseNodeData {
 }
 
 interface BranchPointNodeData extends BaseNodeData {
-  childBranchColor: string;
-  isOnActivePath: boolean;
-  childBranchName: string;
-  childBranchDirection: 'left' | 'right' | 'auto';
-  childCount: number;
-  siblingIndex: number;
+  childBranches: {
+    branchId: string;
+    branchColor: string;
+    branchName: string;
+    direction: 'left' | 'right' | 'auto';
+    isOnActivePath: boolean;
+    handleId?: string;
+  }[];
+  leftBranch?: {
+    branchId: string;
+    branchColor: string;
+    branchName: string;
+    isOnActivePath: boolean;
+  };
+  rightBranch?: {
+    branchId: string;
+    branchColor: string;
+    branchName: string;
+    isOnActivePath: boolean;
+  };
 }
 
 interface StationNodeData extends BaseNodeData {
@@ -112,12 +126,13 @@ interface ConversationContextValue {
   
   // Actions
   fetchData: () => Promise<void>;
-  recalculateLayout: () => Promise<void>;
+  recalculateLayout: (layoutType?: 'tree' | 'slot') => Promise<void>;
   switchBranch: (branchId: string | null) => void;
   createBranch: (params: {
     branchPointNodeId: string;
     name?: string;
     createdBy?: string;
+    direction?: 'left' | 'right' | 'auto';
   }) => Promise<string>;
   updateStreamingContent: (content: string | null) => void;
   sendMessage: (text: string) => Promise<void>;
@@ -173,10 +188,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   useEffect(() => {
     if (projectId && !projectLoading) {
       console.log('🔍 console.log: ConversationProvider initialized with:');
-      console.log('🔍 console.log: - projectId:', projectId, typeof projectId);
-      console.log('🔍 console.log: - currentBranchId:', currentBranchId, typeof currentBranchId);
-      console.log('🔍 console.log: - projectLoading:', projectLoading);
-      console.log('🔍 console.log: - mainBranchId:', mainBranchId);
+      
     }
   }, [projectId, currentBranchId, projectLoading, mainBranchId]);
 
@@ -207,7 +219,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     
     // Fetch data for the new project if we have a valid project ID AND project loading is complete
     if (projectId && !projectLoading) {
-      console.log('🔍 console.log: Project is ready, fetching data');
       fetchData();
     }
   }, [projectId, projectLoading]);
@@ -252,17 +263,16 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   };
 
   // Recalculate layout for all branches
-  const recalculateLayout = async (): Promise<void> => {
+  const recalculateLayout = async (layoutType: 'tree' | 'slot' = 'tree'): Promise<void> => {
     if (!projectId) return;
     
     setLoading(prev => ({ ...prev, layout: true }));
     try {
-      const response = await fetch(`/api/projects/${projectId}/layout`, {
+      const response = await fetch(`/api/projects/${projectId}/layout?layoutType=${layoutType}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ forceRecalculate: true }),
       });
       
       if (!response.ok) {
@@ -285,8 +295,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       return;
     }
     
-    console.log(`Fetching data for project: ${projectId}, branch: ${currentBranchId || 'main'}`);
-    console.log(`Current streaming state: messageId=${streamingParentId}, contentLength=${streamingContent?.length || 0}`);
+    
     
     setLoading(prev => ({ ...prev, data: true }));
     
@@ -298,35 +307,19 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       ]);
       
       // Enhanced logging
-      console.log('Fetched data:', {
-        branchesCount: branchesData.length,
-        nodesCount: nodesData.length,
-        hasRootNode: nodesData.some(node => node.type === 'root'),
-        messageCounts: {
-          userMessages: nodesData.filter(n => n.type === 'user-message').length,
-          assistantMessages: nodesData.filter(n => n.type === 'assistant-message').length,
-          roots: nodesData.filter(n => n.type === 'root').length,
-          branchRoots: nodesData.filter(n => n.type === 'branch-root').length,
-          branchPoints: nodesData.filter(n => n.type === 'branch-point').length
-        }
-      });
+      
       
       // Get unique branch IDs in the data
       const branchIds = [...new Set(nodesData.map(node => node.branch_id))];
-      console.log('Unique branch IDs in fetched nodes:', branchIds);
+      
       
       // Log the available branches
-      console.log('Available branches:', branchesData.map(b => ({ id: b.id, name: b.name })));
+     
       
       // Log the root node if found
       const rootNode = nodesData.find(node => node.type === 'root');
-      if (rootNode) {
-        console.log('Root node in fetched data:', {
-          id: rootNode.id,
-          branch_id: rootNode.branch_id,
-          type: rootNode.type
-        });
-      } else {
+      if (!rootNode) {
+    
         console.log('WARNING: No root node found in fetched data');
       }
     } catch (error) {
@@ -338,11 +331,9 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Switch to a different branch
   const switchBranch = useCallback((branchId: string | null) => {
-    console.log('Switching to branch:', branchId || 'main');
     
     // Prevent switching to the same branch
     if (branchId === currentBranchId) {
-      console.log('Already on branch:', branchId || 'main');
       return;
     }
     
@@ -357,10 +348,11 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     branchPointNodeId: string;
     name?: string;
     createdBy?: string;
+    direction?: 'left' | 'right' | 'auto';
   }): Promise<string> => {
     if (!projectId) throw new Error('No project selected');
     
-    const { branchPointNodeId, name, createdBy = 'user' } = params;
+    const { branchPointNodeId, name, createdBy = 'user', direction = 'auto' } = params;
     
     try {
       // Find the message and its branch
@@ -375,14 +367,16 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
           parent_branch_id: message.branch_id,
           branch_point_node_id: branchPointNodeId,
           name: name || undefined,
-          created_by: createdBy
+          created_by: createdBy,
+          direction: direction
         })
       });
       
       if (!response.ok) throw new Error('Failed to create branch');
-      
+     
       const result = await response.json();
-      
+      // Calculate layout after new branch is crated
+      await recalculateLayout('slot');
       // Refresh data after creating branch
       await fetchData();
       
@@ -397,7 +391,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   const updateStreamingContent = (content: string | null) => {
     // If content is null, it means streaming has ended
     if (content === null) {
-      console.log('Streaming has ended, fetching data immediately');
+     
       
       // Clear streaming state
       setIsStreaming(false);
@@ -418,7 +412,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     
     try {
       // Find the parent node - get the last node in the current branch regardless of type
-      console.log('Finding parent node for new message');
+      
       
       // Filter nodes to current branch, or all nodes if no branch is selected
       const branchNodes = currentBranchId
@@ -447,7 +441,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       const targetBranchId = parentNode.branch_id || '';
       
       // 1. Save user message directly to database
-      console.log(`Saving user message to database with parent_id: ${parentId}, branch_id: ${targetBranchId}`);
       const userMessageResponse = await fetch('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -467,7 +460,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       
       // Get user message ID from response
       const userMessageResponseText = await userMessageResponse.text();
-      console.log('Raw user message response:', userMessageResponseText);
       
       let userMessageData;
       try {
@@ -484,7 +476,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       }
       
       const userMessageId = userMessageData.user_message.id;
-      console.log(`User message saved with ID: ${userMessageId}`);
       
       // 2. Refetch data to update UI with user message
       await fetchData();
@@ -493,10 +484,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       setIsStreaming(true);
       setStreamingContent('');
       setStreamingParentId(userMessageId);
-      console.log(`Started streaming for parent message: ${userMessageId}`);
       
       // 4. Make API call for assistant response with streaming
-      console.log(`Requesting assistant response for user message: ${userMessageId}`);
       
       // Prepare messages array from displayedChatNodes - only include user and assistant messages
       const messageHistory = displayedChatNodes
@@ -520,7 +509,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         stream: true
       };
       
-      console.log(`Full request payload: ${JSON.stringify(requestPayload)}`);
       
       const assistantResponse = await fetch('/api/messages/assistant', {
         method: 'POST',
@@ -550,7 +538,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
           }
           
           // When streaming is complete, clear state and refetch data
-          console.log(`Streaming complete. Final content length: ${responseText.length}`);
           updateStreamingContent(null); // This will clear streaming state and fetch data
         }
       } else {
@@ -561,7 +548,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         }
         
         // Just refresh data
-        console.log('Non-streaming response completed, refreshing data');
         updateStreamingContent(null);
       }
     } catch (error) {
@@ -577,7 +563,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     }
   };
   
-  // Get branch color based on branch ID
+  // Get branch color based on branch ID with improved allocation
   const getBranchColor = useCallback((branchId: string): string => {
     // First check if we have this branch in our branches list
     const branch = branches.find(b => b.id === branchId);
@@ -585,24 +571,52 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       return branch.color;
     }
     
-    // Fallback colors if branch not found or has no color
+    // Improved color allocation logic - different colors for sibling branches
+    // Define our color palette (avoid colors that are too similar)
     const colors = [
-      '#3b82f6', // blue-500 (main line)
+      '#3b82f6', // blue-500 (reserved for main branch)
       '#ef4444', // red-500
       '#10b981', // emerald-500
-      '#f59e0b', // amber-500
       '#8b5cf6', // violet-500
-      '#ec4899', // pink-500
+      '#f59e0b', // amber-500
       '#06b6d4', // cyan-500
+      '#ec4899', // pink-500
       '#84cc16', // lime-500
+      '#6366f1', // indigo-500
+      '#14b8a6', // teal-500
+      '#f97316', // orange-500
+      '#a855f7', // purple-500
     ];
     
-    // Simple hash of branchId to pick a color
+    // Main branch always gets blue
+    if (branch?.depth === 0 || !branch?.parent_branch_id) {
+      return colors[0]; // Blue for main branch
+    }
+    
+    // For child branches, pick based on sibling position to ensure variation
+    if (branch?.parent_branch_id) {
+      // Find all sibling branches (branches with the same parent)
+      const siblingBranches = branches.filter(b => 
+        b.parent_branch_id === branch.parent_branch_id
+      );
+      
+      // Get the index of this branch among its siblings
+      const siblingIndex = siblingBranches.findIndex(b => b.id === branchId);
+      
+      // Use different colors for siblings, but skip the main branch color
+      if (siblingIndex >= 0) {
+        // +1 to skip the main branch color
+        return colors[1 + (siblingIndex % (colors.length - 1))];
+      }
+    }
+    
+    // Fallback: use a hash of the branch ID to pick a color (skip main branch color)
     const hash = branchId.split('').reduce((acc, char) => {
       return acc + char.charCodeAt(0);
     }, 0);
     
-    return colors[hash % colors.length];
+    // Skip the first color (reserved for main branch)
+    return colors[1 + (hash % (colors.length - 1))];
   }, [branches]);
 
   // Get branch name from branchId
@@ -716,11 +730,10 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       return [];
     }
 
-    console.log('Calculating displayedChatNodes');
+   
     
     // Get the branch path - nodes that should be displayed for the current branch
     const branchPathNodes = getBranchPath(currentBranchId);
-    console.log(`getBranchPath returned ${branchPathNodes.length} nodes for branch ${currentBranchId || 'main'}`);
     
     // If we're not streaming, just return the branch path
     if (!isStreaming || !streamingContent || !streamingParentId) {
@@ -750,7 +763,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       
       // Return nodes with the streaming message appended
       const result = [...branchPathNodes, tempStreamingNode];
-      console.log(`Added streaming node. Total nodes: ${result.length}`);
       return result;
     }
     
@@ -928,7 +940,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         // Get direction from layout data if available
         let direction: 'left' | 'right' | 'auto' | undefined = undefined;
         if (branch.metadata?.layout) {
-          direction = branch.metadata.layout.direction;
+          direction = branch.metadata.layout.direction as 'left' | 'right' | 'auto';
         }
         
         branchConnections.push({
@@ -941,6 +953,15 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
           direction
         });
       }
+    });
+    
+    // Group branch connections by branch point ID for multi-branch support
+    const branchPointConnectionsMap = new Map<string, BranchConnection[]>();
+    branchConnections.forEach(connection => {
+      if (!branchPointConnectionsMap.has(connection.branchPointId)) {
+        branchPointConnectionsMap.set(connection.branchPointId, []);
+      }
+      branchPointConnectionsMap.get(connection.branchPointId)?.push(connection);
     });
     
     // Map to store actual branch point Y positions for use in positioning branch roots
@@ -1108,22 +1129,50 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       // Process stations in order
       stations.forEach((station, index) => {
         if (station.branchPoint) {
-          // This is a branch point - add it specifically as a branch point node
+          // Get all child branch connections for this branch point
+          const childConnections = branchPointConnectionsMap.get(station.branchPoint.id) || [];
           
-          // Find the child branch that stems from this branch point
-          const childBranchConnection = branchConnections.find(conn => 
-            conn.branchPointId === station.branchPoint?.id
-          );
-          
-          if (childBranchConnection) {
-            // Get child branch data for styling
-            const childBranchData = branchMap.get(childBranchConnection.childBranchId);
-            if (!childBranchData) return;
+          if (childConnections.length > 0) {
+            // Collect branch data for all connections
+            const childBranches = childConnections.map(conn => {
+              const childBranchData = branchMap.get(conn.childBranchId);
+              if (!childBranchData) return null;
+              
+              // Determine direction if not explicitly set
+              const direction = conn.direction || 
+                (childBranchData.xPosition > xPosition ? 'right' : 'left');
+              
+              return {
+                branchId: conn.childBranchId,
+                branchData: childBranchData,
+                direction,
+                connection: conn,
+                // Initialize with a default handleId that will be updated
+                handleId: direction === 'right' ? 'right' : 'left'
+              };
+            }).filter(Boolean) as Array<{
+              branchId: string;
+              branchData: typeof branchMap extends Map<string, infer T> ? T : never;
+              direction: string;
+              connection: BranchConnection;
+              handleId: string; // Make it required since we always set it
+            }>;
             
-            // Use direction from layout service when available, otherwise calculate it
-            const branchDirection = childBranchConnection.direction || 
-                                    (childBranchData.direction || 
-                                    (childBranchData.xPosition > xPosition ? 'right' : 'left'));
+            // Group branches by direction to assign unique handles
+            const rightBranches = childBranches.filter(b => b.direction === 'right');
+            const leftBranches = childBranches.filter(b => b.direction !== 'right');
+            
+            // Assign handle IDs to branches
+            childBranches.forEach(branch => {
+              const isRightDirection = branch.direction === 'right';
+              const directionBranches = isRightDirection ? rightBranches : leftBranches;
+              const branchIndex = directionBranches.findIndex(b => b.branchId === branch.branchId);
+              
+              // Assign unique handle ID based on direction and index
+              branch.handleId = directionBranches.length > 1 
+                ? `${isRightDirection ? 'right' : 'left'}-${branchIndex}`
+                : isRightDirection ? 'right' : 'left';
+            });
             
             // Add branch point node - ENSURE perfect X alignment with parent branch
             flowNodes.push({
@@ -1135,18 +1184,32 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
               },
               data: {
                 color: color, // Use THIS branch's color for the branch point
-                childBranchColor: childBranchData.color, // Use CHILD branch color for handle/arrow
                 branchId,
                 isActive,
-                isOnActivePath: isActive && activeBranches.has(childBranchConnection.childBranchId),
-                childBranchName: childBranchData.branch.name || 'Branch',
-                childBranchDirection: branchDirection,
-                childCount: childBranchData.branch.metadata?.siblingCount || 1,
-                siblingIndex: childBranchData.branch.metadata?.siblingIndex || 0
+                childBranches: childBranches.map(branch => ({
+                  branchId: branch.branchId,
+                  branchColor: branch.branchData.color,
+                  branchName: branch.branchData.branch.name || 'Branch',
+                  direction: branch.direction as 'left' | 'right' | 'auto',
+                  isOnActivePath: activeBranches.has(branch.branchId),
+                  handleId: branch.handleId
+                })),
+                leftBranch: leftBranches.length > 0 ? {
+                  branchId: leftBranches[0].branchId,
+                  branchColor: branchMap.get(leftBranches[0].branchId)?.color || '',
+                  branchName: branchMap.get(leftBranches[0].branchId)?.branch.name || 'Left Branch',
+                  isOnActivePath: activeBranches.has(leftBranches[0].branchId)
+                } : undefined,
+                rightBranch: rightBranches.length > 0 ? {
+                  branchId: rightBranches[0].branchId,
+                  branchColor: branchMap.get(rightBranches[0].branchId)?.color || '',
+                  branchName: branchMap.get(rightBranches[0].branchId)?.branch.name || 'Right Branch',
+                  isOnActivePath: activeBranches.has(rightBranches[0].branchId)
+                } : undefined
               } as BranchPointNodeData
             });
             
-            // Store the actual Y position of this branch point for its child branch to reference
+            // Store the actual Y position of this branch point for its child branches to reference
             branchPointYPositions.set(station.branchPoint.id, station.yPosition);
             
             // Connect previous node to branch point - ensure perfectly vertical line
@@ -1175,25 +1238,29 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
               });
             }
             
-            // Add a curved connection from branch point to branch root
-            flowEdges.push({
-              id: `edge-branch-${station.branchPoint.id}-${childBranchConnection.branchRootId}`,
-              source: station.branchPoint.id,
-              target: childBranchConnection.branchRootId,
-              type: 'default', // Use default bezier curve for smoother transitions
-              animated: activeBranches.has(childBranchConnection.childBranchId),
-              // Set source and target handles based on branch direction
-              sourceHandle: branchDirection === 'right' ? 'right' : 'left',
-              targetHandle: 'left',
-              style: { 
-                stroke: childBranchData.color, 
-                strokeWidth: activeBranches.has(childBranchConnection.childBranchId) ? 4 : 3,
-                strokeOpacity: activeBranches.has(childBranchConnection.childBranchId) ? 1 : 0.85,
-                strokeLinecap: 'round',
-                opacity: activeBranches.has(childBranchConnection.childBranchId) ? 1 : 0.85,
-                // Add smooth curve effect for a more subway-like appearance
-                strokeDasharray: activeBranches.has(childBranchConnection.childBranchId) ? undefined : '0',
-              }
+            // Add connections for all child branches
+            childBranches.forEach((childBranch, childIndex) => {
+              if (!station.branchPoint) return;
+              
+              // Add a curved connection from branch point to branch root
+              flowEdges.push({
+                id: `edge-branch-${station.branchPoint.id}-${childBranch.connection.branchRootId}`,
+                source: station.branchPoint.id,
+                target: childBranch.connection.branchRootId,
+                type: 'default', // Use default bezier curve for smoother transitions
+                animated: activeBranches.has(childBranch.branchId),
+                // Use the handleId assigned to this branch
+                sourceHandle: childBranch.handleId,
+                targetHandle: 'left',
+                style: { 
+                  stroke: childBranch.branchData.color, 
+                  strokeWidth: activeBranches.has(childBranch.branchId) ? 4 : 3,
+                  strokeOpacity: activeBranches.has(childBranch.branchId) ? 1 : 0.85,
+                  strokeLinecap: 'round',
+                  opacity: activeBranches.has(childBranch.branchId) ? 1 : 0.85,
+                  strokeDasharray: activeBranches.has(childBranch.branchId) ? undefined : '0',
+                }
+              });
             });
             
             // Update previous node

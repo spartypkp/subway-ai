@@ -65,9 +65,49 @@ export class SlotBasedLayoutService {
       };
     }
     
-    // Allocate slots for all branches starting from root
+    // Map branches by ID for easier access
+    const branchMap = new Map<string, Branch>();
+    branches.forEach(branch => {
+      branchMap.set(branch.id, branch);
+    });
+    
+    // Allocate slots for root branch
     slotManager.allocateSlot(rootBranch.id, null, 0); // Root is always slot 0
-    this.allocateSlotsRecursively(rootBranch.id, branchHierarchy, slotManager);
+    
+    // Extract branch direction preferences from metadata
+    const directionalBranches = branches
+      .filter(branch => branch.id !== rootBranch.id) // Skip root branch
+      .map(branch => {
+        // Check for direction preference in metadata
+        let preferredDirection: 'left' | 'right' | 'auto' = 'auto';
+        if (branch.metadata?.layout?.direction) {
+          const directionFromMetadata = branch.metadata.layout.direction;
+          if (directionFromMetadata === 'left' || directionFromMetadata === 'right') {
+            preferredDirection = directionFromMetadata;
+          }
+        }
+        return {
+          id: branch.id,
+          parentId: branch.parent_branch_id,
+          direction: preferredDirection,
+          depth: branch.depth
+        };
+      });
+    
+    // Sort branches by depth to ensure parent branches are processed before children
+    directionalBranches.sort((a, b) => a.depth - b.depth);
+    
+    // Process branches with direction preferences first
+    for (const branch of directionalBranches) {
+      if (!branch.parentId) continue; // Skip if no parent (should never happen)
+      
+      // Find child index - get all siblings and determine index
+      const siblings = branches.filter(b => b.parent_branch_id === branch.parentId);
+      const childIndex = siblings.findIndex(s => s.id === branch.id);
+      
+      // Allocate slot with direction preference
+      slotManager.allocateSlot(branch.id, branch.parentId, childIndex, branch.direction);
+    }
     
     // Find branch points for all branches
     const branchPointMap = this.findBranchPoints(branches, nodes);
@@ -76,9 +116,11 @@ export class SlotBasedLayoutService {
     const branchLayouts: Record<string, BranchLayout> = {};
     
     for (const branch of branches) {
-      // Get allocated slot and convert to x position
+      // Get allocated slot
       const slot = slotManager.getSlotForBranch(branch.id);
-      const x = slotManager.getPositionForSlot(slot);
+      
+      // Calculate x position based on parent relationship
+      const x = slotManager.getPositionForBranch(branch.id, branchMap);
       
       // Determine y position based on branch point location instead of just depth
       let y: number;
@@ -100,10 +142,8 @@ export class SlotBasedLayoutService {
         }
       }
       
-      // Determine branch direction based on slot
-      const direction: 'left' | 'right' | 'auto' = 
-        slot < 0 ? 'left' : 
-        slot > 0 ? 'right' : 'auto';
+      // Get direction from slot manager (which now tracks direction)
+      const direction = slotManager.getDirectionForBranch(branch.id);
       
       // Find branch's siblings for sibling index
       const siblings = branches.filter(b => 
@@ -240,28 +280,6 @@ export class SlotBasedLayoutService {
   }
   
   /**
-   * Recursively allocate slots for all branches in a hierarchy
-   */
-  private allocateSlotsRecursively(
-    branchId: string,
-    hierarchy: Map<string, string[]>,
-    slotManager: BranchSlotManager
-  ): void {
-    const childBranches = hierarchy.get(branchId) || [];
-    
-    // Sort children to ensure consistent allocation
-    childBranches.sort();
-    
-    // Allocate slots for each child
-    childBranches.forEach((childId, index) => {
-      slotManager.allocateSlot(childId, branchId, index);
-      
-      // Recursively allocate for this child's children
-      this.allocateSlotsRecursively(childId, hierarchy, slotManager);
-    });
-  }
-  
-  /**
    * Find branch points for all branches and their positions
    */
   private findBranchPoints(branches: Branch[], nodes: TimelineNode[]): Map<string, { nodeId: string, position: number }> {
@@ -290,10 +308,16 @@ export class SlotBasedLayoutService {
  * BranchSlotManager
  * 
  * Manages slot allocation for branches and converts slots to x positions.
+ * Uses parent-relative positioning for branches.
  */
 class BranchSlotManager {
-  private branchToSlot = new Map<string, number>(); // Maps branch ID to slot
-  private occupiedSlots = new Set<number>();        // Tracks which slots are taken
+  private branchToSlot = new Map<string, number>();        // Maps branch ID to slot
+  private branchRelations = new Map<string, {              // Maps branch ID to parent and relative position
+    parentId: string | null,
+    relativeSlot: number,
+    direction: 'left' | 'right' | 'auto'  // Added direction property
+  }>();
+  private occupiedGlobalSlots = new Set<number>();         // Tracks which global slots are taken (for compatibility)
   
   constructor(
     private centerX: number,
@@ -308,65 +332,190 @@ class BranchSlotManager {
   }
   
   /**
-   * Convert a slot number to an x position
+   * Get the preferred direction for a branch
+   */
+  getDirectionForBranch(branchId: string): 'left' | 'right' | 'auto' {
+    const relation = this.branchRelations.get(branchId);
+    return relation?.direction || 'auto';
+  }
+  
+  /**
+   * Get the position for a branch, calculated relative to its parent
+   */
+  getPositionForBranch(branchId: string, branchMap: Map<string, Branch>): number {
+    const relation = this.branchRelations.get(branchId);
+    
+    // Root branch or no relation found
+    if (!relation || !relation.parentId) {
+      return this.centerX; // Root branch is at centerX
+    }
+    
+    // Get parent branch's position
+    const parentX = this.getPositionForBranch(relation.parentId, branchMap);
+    
+    // Calculate position relative to parent
+    return parentX + (relation.relativeSlot * this.slotWidth);
+  }
+  
+  /**
+   * Calculate x position for a slot (legacy method for compatibility)
    */
   getPositionForSlot(slot: number): number {
     return this.centerX + (slot * this.slotWidth);
   }
   
   /**
-   * Allocate a slot for a branch based on its parent and child index
+   * Shift branches to make room for new insertions
+   * This handles the case where a new branch needs to occupy a slot that would
+   * displace existing branches.
    */
-  allocateSlot(branchId: string, parentBranchId: string | null, childIndex: number): number {
+  private shiftBranchesForInsertion(targetSlot: number, shiftDirection: 'left' | 'right'): void {
+    // Collect branches that need to be shifted
+    const branchesToShift: string[] = [];
+    
+    for (const [branchId, slot] of this.branchToSlot.entries()) {
+      if (shiftDirection === 'right' && slot >= targetSlot) {
+        branchesToShift.push(branchId);
+      } else if (shiftDirection === 'left' && slot <= targetSlot) {
+        branchesToShift.push(branchId);
+      }
+    }
+    
+    // Apply the shifts
+    for (const branchId of branchesToShift) {
+      const currentSlot = this.branchToSlot.get(branchId);
+      if (currentSlot === undefined) continue;
+      
+      // Calculate new slot
+      const newSlot = shiftDirection === 'right' 
+        ? currentSlot + 1
+        : currentSlot - 1;
+      
+      // Update slot maps
+      this.occupiedGlobalSlots.delete(currentSlot);
+      this.branchToSlot.set(branchId, newSlot);
+      this.occupiedGlobalSlots.add(newSlot);
+      
+      // Update relation's relative slot if needed
+      const relation = this.branchRelations.get(branchId);
+      if (relation && relation.parentId) {
+        const parentSlot = this.branchToSlot.get(relation.parentId) || 0;
+        this.branchRelations.set(branchId, {
+          ...relation,
+          relativeSlot: newSlot - parentSlot
+        });
+      }
+    }
+  }
+  
+  /**
+   * Allocate a slot for a branch based on its parent and child index
+   * Now supports directional preferences for better branch positioning
+   */
+  allocateSlot(
+    branchId: string, 
+    parentBranchId: string | null, 
+    childIndex: number, 
+    preferredDirection: 'left' | 'right' | 'auto' = 'auto'
+  ): number {
     // Root branch is always slot 0
     if (!parentBranchId) {
       const slot = 0;
       this.branchToSlot.set(branchId, slot);
-      this.occupiedSlots.add(slot);
+      this.occupiedGlobalSlots.add(slot);
+      
+      // Store relation
+      this.branchRelations.set(branchId, {
+        parentId: null,
+        relativeSlot: 0,
+        direction: 'auto'
+      });
+      
       return slot;
     }
     
     // Get parent's slot
     const parentSlot = this.branchToSlot.get(parentBranchId) || 0;
     
-    // Determine preferred slot based on child index and parent slot
-    let preferredSlot: number;
+    // Determine if parent is to the left or right of center (slot 0)
+    const parentSide = parentSlot < 0 ? 'left' : parentSlot > 0 ? 'right' : 'center';
     
-    // Alternate between right and left of parent based on child index
-    if (childIndex % 2 === 0) {
-      // Even index: try right side first
-      preferredSlot = parentSlot > 0 
-        ? parentSlot + 1  // If parent is right, go further right
-        : parentSlot + 1; // If parent is left or center, go right
-    } else {
-      // Odd index: try left side first
-      preferredSlot = parentSlot < 0 
-        ? parentSlot - 1  // If parent is left, go further left
-        : parentSlot - 1; // If parent is right or center, go left
+    // Determine initial direction based on child index and preferred direction
+    let relativeSlot: number;
+    let resolvedDirection: 'left' | 'right' | 'auto';
+    
+    // If a direction preference is provided, use that
+    if (preferredDirection !== 'auto') {
+      resolvedDirection = preferredDirection;
+      relativeSlot = preferredDirection === 'left' ? -1 : 1;
+    } 
+    // If no preference, use child index based approach
+    else {
+      if (childIndex % 2 === 0) {
+        // Even index: try right side first
+        relativeSlot = 1;
+        resolvedDirection = 'right';
+      } else {
+        // Odd index: try left side first
+        relativeSlot = -1;
+        resolvedDirection = 'left';
+      }
     }
     
-    // Find the next available slot in the preferred direction
-    let slot = preferredSlot;
+    let globalSlot = parentSlot + relativeSlot;
     
-    // If slot is occupied, find the next available one
-    if (this.occupiedSlots.has(slot)) {
+    // Special handling for insertion
+    // 1. Left-facing branch on a right branch should take parent's slot
+    if (resolvedDirection === 'left' && parentSide === 'right') {
+      globalSlot = parentSlot;
+      relativeSlot = 0;
+      
+      // Shift all branches to the right of this slot
+      this.shiftBranchesForInsertion(globalSlot, 'right');
+    }
+    // 2. Right-facing branch on a left branch should take parent's slot
+    else if (resolvedDirection === 'right' && parentSide === 'left') {
+      globalSlot = parentSlot;
+      relativeSlot = 0;
+      
+      // Shift all branches to the left of this slot
+      this.shiftBranchesForInsertion(globalSlot, 'left');
+    }
+    // Handle case where global slot is already occupied
+    else if (this.occupiedGlobalSlots.has(globalSlot)) {
       // Try slots in outward direction from parent
       let offset = 1;
       while (true) {
-        if (childIndex % 2 === 0) {
-          // Try right first, then left
-          slot = parentSlot + offset;
-          if (!this.occupiedSlots.has(slot)) break;
-          
-          slot = parentSlot - offset;
-          if (!this.occupiedSlots.has(slot)) break;
+        // Try in the preferred direction first
+        if (resolvedDirection === 'right') {
+          globalSlot = parentSlot + offset;
+          if (!this.occupiedGlobalSlots.has(globalSlot)) {
+            relativeSlot = offset;
+            break;
+          }
         } else {
-          // Try left first, then right
-          slot = parentSlot - offset;
-          if (!this.occupiedSlots.has(slot)) break;
-          
-          slot = parentSlot + offset;
-          if (!this.occupiedSlots.has(slot)) break;
+          globalSlot = parentSlot - offset;
+          if (!this.occupiedGlobalSlots.has(globalSlot)) {
+            relativeSlot = -offset;
+            break;
+          }
+        }
+        
+        // If no slot found in preferred direction, try the other
+        if (resolvedDirection === 'right') {
+          globalSlot = parentSlot - offset;
+          if (!this.occupiedGlobalSlots.has(globalSlot)) {
+            relativeSlot = -offset;
+            resolvedDirection = 'left'; // Update direction
+            break;
+          }
+        } else {
+          globalSlot = parentSlot + offset;
+          if (!this.occupiedGlobalSlots.has(globalSlot)) {
+            relativeSlot = offset;
+            resolvedDirection = 'right'; // Update direction
+            break;
+          }
         }
         
         // Increase offset and try again
@@ -374,11 +523,18 @@ class BranchSlotManager {
       }
     }
     
-    // Allocate the slot
-    this.branchToSlot.set(branchId, slot);
-    this.occupiedSlots.add(slot);
+    // Store global slot for occupied slot tracking
+    this.branchToSlot.set(branchId, globalSlot);
+    this.occupiedGlobalSlots.add(globalSlot);
     
-    return slot;
+    // Store parent relation with resolved direction
+    this.branchRelations.set(branchId, {
+      parentId: parentBranchId,
+      relativeSlot,
+      direction: resolvedDirection
+    });
+    
+    return globalSlot;
   }
 }
 

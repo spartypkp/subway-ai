@@ -1,6 +1,7 @@
 import { query } from '@/lib/db';
 import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
+import { BranchColorManager } from '@/lib/utils/branchColorManager';
 
 /**
  * API endpoint for creating new branches from existing messages
@@ -15,15 +16,22 @@ export async function POST(req: Request) {
       parent_branch_id, 
       branch_point_node_id, 
       name, 
-      color,
       created_by = 'system',
-      depth
+      direction = 'auto'
     } = body;
 
     // Validate required fields
     if (!project_id || !parent_branch_id || !branch_point_node_id) {
       return NextResponse.json(
         { error: 'Missing required fields: project_id, parent_branch_id, branch_point_node_id' },
+        { status: 400 }
+      );
+    }
+
+    // Validate direction if provided
+    if (direction && !['left', 'right', 'auto'].includes(direction)) {
+      return NextResponse.json(
+        { error: 'Invalid direction. Must be one of: left, right, auto' },
         { status: 400 }
       );
     }
@@ -43,97 +51,96 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: 'Parent branch not found' }, { status: 404 });
       }
 
-      // Calculate depth or use provided value
-      const parentDepth = branchCheck.rows[0].depth;
-      const branchDepth = depth !== undefined ? depth : parentDepth + 1;
-
-      // If no color is provided, determine the best color based on depth and siblings
-      let branchColor = color;
-      if (!branchColor) {
-        // Get a list of colors already used by siblings (branches with same parent and depth)
-        const usedColorsResult = await query(
-          'SELECT color FROM branches WHERE parent_branch_id = $1 AND depth = $2',
-          [parent_branch_id, branchDepth]
-        );
-        
-        const usedColors = usedColorsResult.rows.map(row => row.color);
-        
-        // Define available colors palette
-        const colorPalette = [
-          '#ef4444', // red-500
-          '#10b981', // emerald-500
-          '#f59e0b', // amber-500
-          '#8b5cf6', // violet-500
-          '#ec4899', // pink-500
-          '#06b6d4', // cyan-500
-          '#84cc16', // lime-500
-          '#6366f1', // indigo-500 (current default, moved to end)
-        ];
-        
-        // Find first color not already used by siblings
-        branchColor = colorPalette.find(color => !usedColors.includes(color)) || colorPalette[branchDepth % colorPalette.length];
-      }
-
-      // Check that branch point node exists and is valid for branching
-      const nodeCheck = await query(
-        'SELECT type, branch_id FROM timeline_nodes WHERE id = $1',
+      // Check if a branch point already exists for this message
+      const branchPointCheck = await query(
+        `SELECT id FROM timeline_nodes 
+         WHERE parent_id = $1 AND type = 'branch-point'`,
         [branch_point_node_id]
       );
-
-      if (nodeCheck.rows.length === 0) {
-        await query('ROLLBACK');
-        return NextResponse.json({ error: 'Branch point node not found' }, { status: 404 });
-      }
-
-      // Only allow branching from assistant messages
-      if (nodeCheck.rows[0].type !== 'assistant-message') {
-        await query('ROLLBACK');
-        return NextResponse.json(
-          { error: 'Branches can only be created from assistant messages' },
-          { status: 400 }
+      
+      let branchPointNodeId;
+      
+      if (branchPointCheck.rows.length > 0) {
+        // Branch point already exists
+        branchPointNodeId = branchPointCheck.rows[0].id;
+        
+        // Check if a branch already exists in the requested direction
+        const existingBranchesCheck = await query(
+          `SELECT id, metadata FROM branches 
+           WHERE branch_point_node_id = $1`,
+          [branchPointNodeId]
+        );
+        
+        // Check if the direction is already taken
+        const directionTaken = existingBranchesCheck.rows.some(branch => {
+          try {
+            const metadata = branch.metadata || {};
+            return metadata.layout?.direction === direction;
+          } catch {
+            return false;
+          }
+        });
+        
+        if (directionTaken) {
+          await query('ROLLBACK');
+          return NextResponse.json(
+            { error: `A branch already exists in the ${direction} direction` },
+            { status: 409 }
+          );
+        }
+      } else {
+        // Create a new branch point node
+        branchPointNodeId = uuidv4();
+        
+        await query(
+          `INSERT INTO timeline_nodes (
+            id, project_id, branch_id, parent_id,
+            type, message_text, message_role, created_by, created_at, position
+          ) 
+          SELECT 
+            $1, project_id, branch_id, id,
+            'branch-point', NULL, 'system', $2, NOW(), position + 0.5
+          FROM timeline_nodes
+          WHERE id = $3`,
+          [
+            branchPointNodeId, created_by, branch_point_node_id
+          ]
         );
       }
 
-      // Check that branch point belongs to parent branch
-      if (nodeCheck.rows[0].branch_id !== parent_branch_id) {
-        await query('ROLLBACK');
-        return NextResponse.json(
-          { error: 'Branch point node does not belong to the specified parent branch' },
-          { status: 400 }
-        );
-      }
+      // Calculate depth or use provided value
+      const parentDepth = branchCheck.rows[0].depth;
+      const branchDepth = parentDepth + 1;
+
+      // Fetch ALL branches for the project to initialize color manager properly
+      const allBranchesResult = await query(
+        'SELECT id, parent_branch_id, depth, color FROM branches WHERE project_id = $1',
+        [project_id]
+      );
+      
+      // Initialize color manager with ALL existing branches
+      const colorManager = new BranchColorManager(allBranchesResult.rows);
 
       // Generate new branch ID
       const branchId = uuidv4();
       const branchName = name || `Branch ${branchDepth}-${branchId.slice(0, 4)}`;
       
-      // Create a dedicated branch point node after the assistant message
-      const branchPointNodeId = uuidv4();
-      await query(
-        `INSERT INTO timeline_nodes (
-          id, project_id, branch_id, parent_id,
-          type, message_text, message_role, created_by, created_at, position
-        ) 
-        SELECT 
-          $1, project_id, branch_id, id,
-          'branch-point', NULL, 'system', $2, NOW(), position + 0.5
-        FROM timeline_nodes
-        WHERE id = $3`,
-        [
-          branchPointNodeId, created_by, branch_point_node_id
-        ]
-      );
+      // Use the BranchColorManager to get a color for the new branch
+      const color = colorManager.getColorForBranch(branchId, parent_branch_id, branchDepth);
       
-      // Create the new branch, referencing the new branch point
+      console.log(`Assigned color for new branch ${branchId}: ${color} (depth: ${branchDepth})`);
+
+      // Create the new branch, referencing the branch point
       const branchResult = await query(
         `INSERT INTO branches (
           id, project_id, parent_branch_id, branch_point_node_id,
-          name, color, depth, created_by, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+          name, color, depth, created_by, created_at, metadata
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9)
         RETURNING *`,
         [
           branchId, project_id, parent_branch_id, branchPointNodeId,
-          branchName, branchColor, branchDepth, created_by
+          branchName, color, branchDepth, created_by,
+          JSON.stringify({ layout: { direction } })
         ]
       );
 

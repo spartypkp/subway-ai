@@ -8,24 +8,35 @@ import { BranchPoint } from './nodes/branchPoint';
 import { BranchRoot } from './nodes/branchRoot';
 import { useConversation } from '@/lib/contexts/ConversationContext';
 import { TimelineNode } from '@/lib/types/database';
+import { TrackSegment } from './nodes/trackSegment';
 
 // Define the shape we expect for timeline nodes as used by our components
 
 
-// Define branch point info structure
+// Define branch info structure for each direction
+export interface BranchInfo {
+  branchId: string;
+  branchName: string | null;
+  branchColor: string;
+  direction: 'left' | 'right' | 'auto';
+}
+
+// Define branch point info structure to support multiple directions
 export interface BranchPointInfo {
   parentBranchId: string;
-  childBranchId: string;
-  childBranchName: string | null;
-  nodeId: string | null;
+  nodeId: string;
   position: number;
   parentBranchColor: string;
-  childBranchColor: string;
+  branches: {
+    left?: BranchInfo;
+    right?: BranchInfo;
+    auto?: BranchInfo;
+  };
 }
 
 interface ConversationViewProps {
   onMessageSelect?: (nodeId: string) => void;
-  onBranchClick?: (nodeId: string) => void;
+  onBranchClick?: (nodeId: string, direction?: 'left' | 'right' | 'auto') => void;
 }
 
 export const ConversationView: React.FC<ConversationViewProps> = ({
@@ -59,9 +70,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   };
 
   // Handle branch creation click
-  const handleBranchClick = (nodeId: string) => {
+  const handleBranchClick = (nodeId: string, direction?: 'left' | 'right' | 'auto') => {
     if (onBranchClick) {
-      onBranchClick(nodeId);
+      onBranchClick(nodeId, direction);
     }
   };
 
@@ -73,30 +84,51 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     ).length;
   };
 
-  // Get branch point info for a specific message - direct calculation instead of state
+  // Update getBranchPointInfo to handle multiple branches
   const getBranchPointInfo = (nodeId: string): BranchPointInfo | undefined => {
-    // Find the branch that has this message as its branch point
-    console.log('Message ID', nodeId);
-    console.log('Branches', branches);
-    const childBranch = branches.find(b => b.branch_point_node_id === nodeId);
-    console.log('childBranch', childBranch);
-    console.log(`Not child branch`, !childBranch);
-    console.log(`Not parent branch`, !childBranch?.parent_branch_id);
+    // Find all branches that have this message as their branch point
+    const childBranches = branches.filter(b => b.branch_point_node_id === nodeId);
     
-    if (!childBranch || !childBranch.parent_branch_id) return undefined;
+    if (childBranches.length === 0) return undefined;
     
-    // Only return branch point info if we're on one of the relevant branches
-    // This helps prevent showing branch UI when viewing an unrelated branch
-   
+    // Get parent branch ID from first child (all should have the same parent)
+    const parentBranchId = childBranches[0].parent_branch_id;
+    
+    if (!parentBranchId) return undefined;
+    
+    // Build branch mapping by direction
+    const branchMap: {
+      left?: BranchInfo;
+      right?: BranchInfo;
+      auto?: BranchInfo;
+    } = {};
+    
+    // Process each child branch and organize by direction
+    childBranches.forEach(branch => {
+      let direction: 'left' | 'right' | 'auto' = 'auto';
+      
+      // Extract direction from branch metadata
+      if (branch.metadata?.layout?.direction) {
+        if (['left', 'right', 'auto'].includes(branch.metadata.layout.direction)) {
+          direction = branch.metadata.layout.direction as 'left' | 'right' | 'auto';
+        }
+      }
+      
+      // Add to appropriate direction in map
+      branchMap[direction] = {
+        branchId: branch.id,
+        branchName: branch.name,
+        branchColor: getBranchColor(branch.id),
+        direction
+      };
+    });
     
     return {
-        parentBranchId: childBranch.parent_branch_id,
-        childBranchId: childBranch.id,
-        childBranchName: childBranch.name,
-        nodeId: childBranch.branch_point_node_id,
-        position: allNodes.find(m => m.id === nodeId)?.position || 0,
-        parentBranchColor: getBranchColor(childBranch.parent_branch_id),
-        childBranchColor: getBranchColor(childBranch.id)
+      parentBranchId,
+      nodeId,
+      position: allNodes.find(m => m.id === nodeId)?.position || 0,
+      parentBranchColor: getBranchColor(parentBranchId),
+      branches: branchMap
     };
   };
 
@@ -104,21 +136,33 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const getBranchSwitchTarget = (branchPointInfo: BranchPointInfo | undefined, currentBranchId: string | null) => {
     if (!branchPointInfo) return null;
     
-    // If we're on the child branch, switch to parent
-    if (currentBranchId === branchPointInfo.childBranchId) {
+    // Get all branches at this point
+    const branches = Object.values(branchPointInfo.branches).filter(Boolean);
+    
+    // If we're on the parent branch, suggest first available child branch
+    if (currentBranchId === branchPointInfo.parentBranchId) {
+      // Find first available branch
+      const firstBranch = branches[0];
+      if (firstBranch) {
+        return {
+          branchId: firstBranch.branchId,
+          branchName: firstBranch.branchName,
+          branchColor: firstBranch.branchColor
+        };
+      }
+      return null;
+    }
+    
+    // If we're on one of the child branches, suggest parent
+    if (branches.some(b => b.branchId === currentBranchId)) {
       return {
         branchId: branchPointInfo.parentBranchId,
         branchName: getBranchName(branchPointInfo.parentBranchId),
         branchColor: branchPointInfo.parentBranchColor
       };
     }
-
-    // Otherwise, switch to child branch
-    return {
-      branchId: branchPointInfo.childBranchId,
-      branchName: branchPointInfo.childBranchName,
-      branchColor: branchPointInfo.childBranchColor
-    };
+    
+    return null;
   };
 
   // Scroll to bottom
@@ -163,6 +207,15 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     node.type === 'user-message' || node.type === 'assistant-message'
   );
 
+  // Get the current active branch color for the track
+  const getCurrentBranchColor = () => {
+    if (!displayedChatNodes.length) return "#3b82f6"; // Default blue if no nodes
+    
+    // Use the branch color from the most recent node
+    const lastNode = displayedChatNodes[displayedChatNodes.length - 1];
+    return getBranchColor(lastNode.branch_id);
+  };
+
   // Empty state
   if (!hasMessagesToDisplay) {
     return (
@@ -181,7 +234,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     <>
       <div
         ref={scrollContainerRef}
-        className="flex flex-col mx-auto max-w-3xl p-0 pb-32 h-[calc(100vh-200px)] overflow-y-auto overflow-x-hidden relative scroll-smooth"
+        className="flex flex-col mx-auto max-w-3xl p-0 pb-32 h-full overflow-y-auto overflow-x-hidden relative scroll-smooth"
       >
         {/* Project root indicator */}
         {displayedChatNodes.length > 0 && (
@@ -244,7 +297,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
             const branchPointInfo = getBranchPointInfo(node.id);
             const hasBranchOptions = branchPointInfo && (
               branchPointInfo.parentBranchId === node.branch_id ||
-              branchPointInfo.childBranchId === node.branch_id
+              branchPointInfo.nodeId === node.branch_id
             );
             
             return (
@@ -287,6 +340,19 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
             </div>
           </div>
         )}
+
+        {/* Add the continuing track segment INSIDE the scroll container */}
+        <div className="relative w-full max-w-3xl mx-auto flex-1 min-h-[100px]">
+          <div 
+            className="absolute left-1/2 transform -translate-x-1/2 z-0" 
+            style={{
+              width: "2.5px",
+              background: getCurrentBranchColor(),
+              top: '0',
+              height: '100%'
+            }}
+          />
+        </div>
 
         <div ref={messagesEndRef} className="h-4" />
       </div>
