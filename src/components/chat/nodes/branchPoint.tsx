@@ -6,7 +6,7 @@ import { TrackSegment } from './trackSegment';
 import { BranchPointInfo } from '../conversationView'
 
 interface BranchPointProps {
-  message: TimelineNode;
+  node: TimelineNode;
   branchPointInfo: BranchPointInfo;
   currentBranchId: string | null;
   getBranchName: (branchId: string) => string | null;
@@ -14,7 +14,7 @@ interface BranchPointProps {
 }
 
 export const BranchPoint: React.FC<BranchPointProps> = ({
-  message,
+  node,
   branchPointInfo,
   currentBranchId,
   getBranchName,
@@ -30,22 +30,18 @@ export const BranchPoint: React.FC<BranchPointProps> = ({
 
   return (
     <div
-      className="relative py-12 z-10"
+      className="relative py-6 z-10 mx-auto w-full max-w-3xl px-16 flex flex-col items-center"
       data-node="branch-point"
-      data-id={message.id}
-      data-branch={message.branch_id}
+      data-id={node.id}
+      data-branch={node.branch_id}
       data-parent-branch={branchPointInfo.parentBranchId}
       data-child-branch={branchPointInfo.childBranchId}
       data-current-view={isOnChildBranch ? 'child' : 'parent'}
     >
-      {/* Connection to original branch before the split */}
-      <TrackSegment 
-        color={branchPointInfo.parentBranchColor}
-        height="20px"
-        position="above"
-      />
+      {/* Continuous vertical track that runs through the entire component */}
+      <div className="absolute left-1/2 top-0 bottom-0 transform -translate-x-1/2 z-0" style={{ width: "2.5px", background: mainLineColor }} />
 
-      <div className="flex items-center justify-center">
+      <div className="flex items-center justify-center w-full relative py-8">
         {/* Branch point node with parent branch color */}
         <div
           className="rounded-full border-3 bg-background size-14 flex items-center justify-center shadow-lg relative z-20"
@@ -62,19 +58,19 @@ export const BranchPoint: React.FC<BranchPointProps> = ({
           <div className="relative">
             {/* Horizontal branch line with target branch color */}
             <div
-              className="absolute h-3"
+              className="absolute h-[2.5px]"
               style={{
                 background: sideLineColor,
                 borderTopRightRadius: '4px',
                 width: 'calc(50vw - 20px)',
                 left: '-10px',
                 top: '-1.5px',
-                zIndex: 0
+                zIndex: 1
               }}
             />
 
             {/* Branch switch button with target branch color */}
-            <div className="absolute transform translate-y-8 pointer-events-auto" style={{ left: '40px', zIndex: 1 }}>
+            <div className="absolute transform translate-y-4 pointer-events-auto" style={{ left: '40px', zIndex: 2 }}>
               <Button
                 variant="outline"
                 size="sm"
@@ -94,26 +90,17 @@ export const BranchPoint: React.FC<BranchPointProps> = ({
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Continuing vertical line (current branch) */}
-        <TrackSegment 
-          color={mainLineColor}
-          height="50px"
-          styles={{
-            top: 'calc(50% + 28px)',
-          }}
-        />
-
-        {/* Visual label */}
-        <div 
-          className="absolute top-20 text-xs font-medium px-2 py-1 rounded-full bg-background/80 border"
-          style={{ 
-            borderColor: `${branchPointInfo.parentBranchColor}40`, 
-            color: branchPointInfo.parentBranchColor 
-          }}
-        >
-          Branch point
-        </div>
+      {/* Visual label */}
+      <div 
+        className="absolute top-1 right-3 text-xs font-medium px-2 py-1 rounded-full bg-background/80 border z-10"
+        style={{ 
+          borderColor: `${branchPointInfo.parentBranchColor}40`, 
+          color: branchPointInfo.parentBranchColor 
+        }}
+      >
+        Branch point
       </div>
     </div>
   );

@@ -55,7 +55,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
 
   // Fetch all projects
   const fetchProjects = useCallback(async (): Promise<void> => {
-    console.log('🔍 DEBUG: Fetching projects...');
+    //console.log('🔍 DEBUG: Fetching projects...');
     setLoading(true);
     
     try {
@@ -65,7 +65,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
       }
       
       const data = await response.json();
-      console.log('🔍 DEBUG: Projects fetched:', data.length, 'projects');
+      //console.log('🔍 DEBUG: Projects fetched:', data.length, 'projects');
       
       // Map any title property to name for backward compatibility
       const processedData = data.map((project: any) => ({
@@ -77,7 +77,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
       
       // If there are projects and none selected, select the first one
       if (processedData.length > 0 && !selectedProjectId) {
-        console.log('🔍 DEBUG: Auto-selecting first project:', processedData[0].id, processedData[0].name);
+        //console.log('🔍 DEBUG: Auto-selecting first project:', processedData[0].id, processedData[0].name);
         setSelectedProjectId(processedData[0].id);
       }
     } catch (error) {
@@ -89,7 +89,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
 
   // Select a project
   const selectProject = useCallback((projectId: string) => {
-    console.log('🔍 DEBUG: Selecting project:', projectId);
+    //console.log('🔍 DEBUG: Selecting project:', projectId);
     setSelectedProjectId(projectId);
   }, []);
 
@@ -140,7 +140,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
       // Reset main branch ID
       setMainBranchId(null);
       
-      console.log('🔍 DEBUG: Project deleted successfully');
+      //console.log('🔍 DEBUG: Project deleted successfully');
     } catch (error) {
       console.error("Error deleting project:", error);
       throw error;
@@ -160,11 +160,11 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
       // Find the root node
       const rootNode = data.find((node: TimelineNode) => node.type === 'root');
       if (rootNode) {
-        console.log('🔍 DEBUG: Found root node:', rootNode.id, 'with branch:', rootNode.branch_id);
+        //console.log('🔍 DEBUG: Found root node:', rootNode.id, 'with branch:', rootNode.branch_id);
         setMainBranchId(rootNode.branch_id);
         return rootNode.branch_id;
       } else {
-        console.warn('🔍 DEBUG: No root node found in response');
+        //console.warn('🔍 DEBUG: No root node found in response');
         setMainBranchId(null);
         return null;
       }

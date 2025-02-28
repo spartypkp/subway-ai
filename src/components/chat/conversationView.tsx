@@ -17,15 +17,15 @@ export interface BranchPointInfo {
   parentBranchId: string;
   childBranchId: string;
   childBranchName: string | null;
-  messageId: string | null;
+  nodeId: string | null;
   position: number;
   parentBranchColor: string;
   childBranchColor: string;
 }
 
 interface ConversationViewProps {
-  onMessageSelect?: (messageId: string) => void;
-  onBranchClick?: (messageId: string) => void;
+  onMessageSelect?: (nodeId: string) => void;
+  onBranchClick?: (nodeId: string) => void;
 }
 
 export const ConversationView: React.FC<ConversationViewProps> = ({
@@ -51,17 +51,17 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Handle message selection
-  const handleMessageSelect = (messageId: string) => {
-    setActiveMessage(messageId);
+  const handleMessageSelect = (nodeId: string) => {
+    setActiveMessage(nodeId);
     if (onMessageSelect) {
-      onMessageSelect(messageId);
+      onMessageSelect(nodeId);
     }
   };
 
   // Handle branch creation click
-  const handleBranchClick = (messageId: string) => {
+  const handleBranchClick = (nodeId: string) => {
     if (onBranchClick) {
-      onBranchClick(messageId);
+      onBranchClick(nodeId);
     }
   };
 
@@ -74,25 +74,27 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   };
 
   // Get branch point info for a specific message - direct calculation instead of state
-  const getBranchPointInfo = (messageId: string): BranchPointInfo | undefined => {
+  const getBranchPointInfo = (nodeId: string): BranchPointInfo | undefined => {
     // Find the branch that has this message as its branch point
-    const childBranch = branches.find(b => b.branch_point_node_id === messageId);
+    console.log('Message ID', nodeId);
+    console.log('Branches', branches);
+    const childBranch = branches.find(b => b.branch_point_node_id === nodeId);
+    console.log('childBranch', childBranch);
+    console.log(`Not child branch`, !childBranch);
+    console.log(`Not parent branch`, !childBranch?.parent_branch_id);
     
     if (!childBranch || !childBranch.parent_branch_id) return undefined;
     
     // Only return branch point info if we're on one of the relevant branches
     // This helps prevent showing branch UI when viewing an unrelated branch
-    if (currentBranchId !== childBranch.parent_branch_id && 
-        currentBranchId !== childBranch.id) {
-        return undefined;
-    }
+   
     
     return {
         parentBranchId: childBranch.parent_branch_id,
         childBranchId: childBranch.id,
         childBranchName: childBranch.name,
-        messageId: childBranch.branch_point_node_id,
-        position: allNodes.find(m => m.id === messageId)?.position || 0,
+        nodeId: childBranch.branch_point_node_id,
+        position: allNodes.find(m => m.id === nodeId)?.position || 0,
         parentBranchColor: getBranchColor(childBranch.parent_branch_id),
         childBranchColor: getBranchColor(childBranch.id)
     };
@@ -179,7 +181,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     <>
       <div
         ref={scrollContainerRef}
-        className="flex flex-col gap-4 max-w-3xl mx-auto p-4 pb-32 h-[calc(100vh-200px)] overflow-y-auto overflow-x-hidden relative scroll-smooth"
+        className="flex flex-col mx-auto max-w-3xl p-0 pb-32 h-[calc(100vh-200px)] overflow-y-auto overflow-x-hidden relative scroll-smooth"
       >
         {/* Project root indicator */}
         {displayedChatNodes.length > 0 && (
@@ -187,32 +189,34 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
         )}
 
         {/* Render all chat nodes */}
-        {displayedChatNodes.map((message, index) => {
+        {displayedChatNodes.map((node, index) => {
           // Skip root nodes as they're not visible messages
-          if (message.type === 'root') {
+          if (node.type === 'root') {
             return null;
           }
 
           // For branch roots
-          if (message.type === 'branch-root') {
+          if (node.type === 'branch-root') {
             return (
               <BranchRoot
-                key={message.id}
-                message={message}
-                branchColor={getBranchColor(message.branch_id)}
+                key={node.id}
+                node={node}
+                branchColor={getBranchColor(node.branch_id)}
               />
             );
           }
 
           // For branch points
-          if (message.type === 'branch-point') {
-            const branchPointInfo = getBranchPointInfo(message.id);
-            if (!branchPointInfo) return null;
-            
+          if (node.type === 'branch-point') {
+            const branchPointInfo = getBranchPointInfo(node.id);
+            if (!branchPointInfo) {
+                console.log('No branch point info found for message', node.id);
+                return null;
+            }
             return (
               <BranchPoint
-                key={message.id}
-                message={message}
+                key={node.id}
+                node={node}
                 branchPointInfo={branchPointInfo}
                 currentBranchId={currentBranchId}
                 getBranchName={getBranchName}
@@ -222,34 +226,34 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
           }
 
           // For user messages
-          if (message.type === 'user-message') {
+          if (node.type === 'user-message') {
             return (
               <UserMessage
-                key={message.id}
-                message={message}
-                isActive={activeMessage === message.id}
-                branchColor={getBranchColor(message.branch_id)}
+                key={node.id}
+                node={node}
+                isActive={activeMessage === node.id}
+                branchColor={getBranchColor(node.branch_id)}
                 onMessageSelect={handleMessageSelect}
               />
             );
           }
 
           // For assistant messages
-          if (message.type === 'assistant-message') {
-            const stationNumber = getStationNumber(message, index, displayedChatNodes);
-            const branchPointInfo = getBranchPointInfo(message.id);
+          if (node.type === 'assistant-message') {
+            const stationNumber = getStationNumber(node, index, displayedChatNodes);
+            const branchPointInfo = getBranchPointInfo(node.id);
             const hasBranchOptions = branchPointInfo && (
-              branchPointInfo.parentBranchId === message.branch_id ||
-              branchPointInfo.childBranchId === message.branch_id
+              branchPointInfo.parentBranchId === node.branch_id ||
+              branchPointInfo.childBranchId === node.branch_id
             );
             
             return (
               <AssistantMessage
-                key={message.id}
-                message={message}
-                isActive={activeMessage === message.id}
+                key={node.id}
+                node={node}
+                isActive={activeMessage === node.id}
                 streamingContent={streamingContent}
-                branchColor={getBranchColor(message.branch_id)}
+                branchColor={getBranchColor(node.branch_id)}
                 stationNumber={stationNumber}
                 onMessageSelect={handleMessageSelect}
                 onBranchClick={handleBranchClick}
@@ -268,7 +272,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
         {/* Loading indicator for new messages */}
         {streamingContent && (
           <div
-            className="flex justify-center py-4 z-10"
+            className="flex justify-center py-3 z-10 w-full max-w-3xl mx-auto px-16"
             data-node="loading-indicator"
           >
             <div className="flex flex-col items-center">

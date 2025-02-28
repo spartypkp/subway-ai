@@ -4,30 +4,25 @@ import { TimelineNode } from '@/lib/types/database';
 import { TrackSegment } from './trackSegment';
 
 interface BranchRootProps {
-  message: TimelineNode;
+  node: TimelineNode;
   branchColor: string;
 }
 
 export const BranchRoot: React.FC<BranchRootProps> = ({
-  message,
+  node,
   branchColor
 }) => {
   return (
     <div
-      className="relative py-8 z-10" // Less vertical space than branch point
+      className="relative py-5 z-10 mx-auto w-full max-w-3xl px-16 flex flex-col items-center"
       data-node="branch-root"
-      data-id={message.id}
-      data-branch={message.branch_id}
+      data-id={node.id}
+      data-branch={node.branch_id}
     >
-      {/* Connection from above */}
-      <TrackSegment 
-        color={branchColor}
-        height="20px"
-        width="2px"
-        position="above"
-      />
+      {/* Continuous vertical track that runs through the entire component */}
+      <div className="absolute left-1/2 top-0 bottom-0 transform -translate-x-1/2 z-0" style={{ width: "2.5px", background: branchColor }} />
       
-      <div className="flex items-center justify-center">
+      <div className="flex items-center justify-center w-full relative py-4">
         {/* Distinct visual for branch root - station entrance */}
         <div
           className="rounded-lg border-2 bg-background p-2 flex items-center justify-center shadow-md relative z-20"
@@ -41,16 +36,6 @@ export const BranchRoot: React.FC<BranchRootProps> = ({
             </span>
           </div>
         </div>
-        
-        {/* Connection below */}
-        <TrackSegment 
-          color={branchColor}
-          height="50px"
-          width="2px"
-          styles={{
-            top: 'calc(50% + 20px)',
-          }}
-        />
       </div>
     </div>
   );

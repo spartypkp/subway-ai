@@ -7,7 +7,8 @@ import { Minimap } from "@/components/minimap";
 // import { MinimapWithContext } from "@/components/minimapWithContext";
 import { ChatControls } from "@/components/chat/chatControls";
 // import { ChatControlsWithContext } from "@/components/chat/chatControlsWithContext";
-import { MessageList } from "@/components/chat/messageList";
+// import { MessageList } from "@/components/chat/messageList";
+import { ConversationView } from "@/components/chat/conversationView";
 // import { MessageListWithContext } from "@/components/chat/messageListWithContext";
 import { Button } from "@/components/ui/button";
 import { 
@@ -43,12 +44,25 @@ import {
 import { cn } from "@/lib/utils";
 import { useProject } from "@/lib/contexts/ProjectContext";
 import { useConversation } from "@/lib/contexts/ConversationContext";
-
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 
 export default function Home() {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+	const [branchDialogOpen, setBranchDialogOpen] = useState(false);
+	const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+	const [branchReason, setBranchReason] = useState('');
+	const [creatingBranch, setCreatingBranch] = useState(false);
 
 	// Get project data from ProjectContext
 	const { 
@@ -66,6 +80,7 @@ export default function Home() {
 	const {
 		currentBranchId,
 		switchBranch,
+		createBranch,
 		loading: conversationLoading
 	} = useConversation();
 
@@ -114,6 +129,37 @@ export default function Home() {
 			}
 		} else {
 			console.log('🔍 DEBUG: Already on branch', branchId);
+		}
+	};
+	
+	// Handle branch creation from a message
+	const handleBranchClick = (messageId: string) => {
+		setSelectedMessageId(messageId);
+		setBranchDialogOpen(true);
+	};
+
+	// Create a new branch based on the selected message
+	const handleCreateBranch = async () => {
+		setCreatingBranch(true);
+
+		try {
+			// Use the context's createBranch function
+			const newBranchId = await createBranch({
+				branchPointNodeId: selectedMessageId as string,
+				name: branchReason || undefined,
+				createdBy: 'user'
+			});
+
+			// Reset dialog state
+			setBranchDialogOpen(false);
+			setBranchReason('');
+
+			// Switch to the new branch
+			switchBranch(newBranchId);
+		} catch (error) {
+			console.error('Failed to create branch:', error);
+		} finally {
+			setCreatingBranch(false);
 		}
 	};
 
@@ -314,12 +360,9 @@ export default function Home() {
 									</div>
 								</div>
 							) : (
-								
-                                    <Minimap 
-										onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
-									/>
-                               
-								
+								<Minimap 
+									onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
+								/>
 							)}
 						</div>
 						
@@ -349,7 +392,10 @@ export default function Home() {
 							{/* Chat Area */}
 							<div className="flex-1 overflow-hidden flex flex-col">
 									<div className="flex-1 overflow-y-auto pb-2">
-										<MessageList />
+										<ConversationView 
+											onMessageSelect={(messageId) => console.log('Message selected:', messageId)}
+											onBranchClick={handleBranchClick}
+										/>
 									</div>
 									
 									{/* Chat Controls */}
@@ -405,6 +451,49 @@ export default function Home() {
 					</AlertDialogFooter>
 				</AlertDialogContent>
 			</AlertDialog>
+
+			{/* Branch creation dialog */}
+			<Dialog open={branchDialogOpen} onOpenChange={setBranchDialogOpen}>
+				<DialogContent className="max-w-md">
+					<DialogHeader>
+						<DialogTitle>Create a new subway branch</DialogTitle>
+						<DialogDescription>
+							Create a new conversation branch from this point. This allows you to explore a different direction without losing the original conversation.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="space-y-4 py-4">
+						<div className="space-y-2">
+							<Label htmlFor="branch-reason">Branch name (optional)</Label>
+							<Input
+								id="branch-reason"
+								placeholder="e.g., Alternative approach, What-if scenario"
+								value={branchReason}
+								onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBranchReason(e.target.value)}
+							/>
+							<p className="text-xs text-muted-foreground mt-1">
+								A descriptive name will help you remember the purpose of this branch.
+							</p>
+						</div>
+					</div>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setBranchDialogOpen(false)}>Cancel</Button>
+						<Button
+							onClick={handleCreateBranch}
+							disabled={creatingBranch}
+							className="gap-1"
+						>
+							{creatingBranch ? (
+								<>Creating<span className="animate-pulse">...</span></>
+							) : (
+								<>
+									<GitBranch className="h-4 w-4 mr-1" />
+									Create Branch
+								</>
+							)}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</main>
 	);
 }
