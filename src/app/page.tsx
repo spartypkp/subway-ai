@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 import { useProject } from "@/lib/contexts/ProjectContext";
 import { useConversation } from "@/lib/contexts/ConversationContext";
 
+
 export default function Home() {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -190,9 +191,11 @@ export default function Home() {
 														</div>
 													</div>
 												) : (
-														<Minimap 
+                                                    
+                                                        <Minimap 
 															onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
 														/>
+                                                   
 												)}
 											</div>
 										</div>
@@ -312,9 +315,10 @@ export default function Home() {
 								</div>
 							) : (
 								
-									<Minimap 
+                                    <Minimap 
 										onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
 									/>
+                               
 								
 							)}
 						</div>

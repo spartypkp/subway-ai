@@ -9,7 +9,7 @@ export async function GET(
   context: { params: { id: string; }; }
 ) {
   const { params } = context;
-  const projectId = await params.id;
+  const { id: projectId } = await params;
   if (!projectId) {
     return NextResponse.json({ error: 'Missing project ID' }, { status: 400 });
   }

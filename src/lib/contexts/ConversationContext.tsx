@@ -94,7 +94,9 @@ interface ConversationContextValue {
   // Data
   branches: Branch[];
   allNodes: TimelineNode[];
-  displayedNodes: TimelineNode[];
+  
+  displayedChatNodes: TimelineNode[];
+
   layoutData: Record<string, BranchLayout> | null;
   
   // State
@@ -104,9 +106,11 @@ interface ConversationContextValue {
     data: boolean;
     layout: boolean;
   };
-  optimisticMessages: TimelineNode[];
-  streamingMessageId: string | null;
+  
+  // Simplified streaming state
+  isStreaming: boolean;
   streamingContent: string | null;
+  streamingParentId: string | null;
   
   // Actions
   fetchData: () => Promise<void>;
@@ -118,17 +122,8 @@ interface ConversationContextValue {
     name?: string;
     createdBy?: string;
   }) => Promise<string>;
-  handleOptimisticUpdate: (newMessages: TimelineNode[]) => void;
   updateStreamingContent: (content: string | null) => void;
   sendMessage: (text: string) => Promise<void>;
-  updateMessageState: (params: {
-    action: 'create' | 'update' | 'stream' | 'error';
-    userMessage?: string;
-    parentId?: string;
-    streamContent?: string;
-    messageId?: string;
-    errorMessage?: string;
-  }) => any;
   
   // Utility functions
   getBranchColor: (branchId: string) => string;
@@ -151,7 +146,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   pollingInterval = 5000,
 }) => {
   // Get project data from ProjectContext
-  const { selectedProjectId, mainBranchId } = useProject();
+  const { selectedProjectId, mainBranchId, loading: projectLoading } = useProject();
   
   // Ensure we have a valid project ID
   const projectId = selectedProjectId || '';
@@ -163,32 +158,48 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   
   // UI state
   const [currentBranchId, setCurrentBranchId] = useState<string | null>(null);
-  const [optimisticMessages, setOptimisticMessages] = useState<TimelineNode[]>([]);
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  
+  // Simplified streaming state
+  const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
+  const [streamingParentId, setStreamingParentId] = useState<string | null>(null);
   
   // Loading states
   const [loading, setLoading] = useState({
     data: true,
     layout: false,
   });
+  
+  // Track if conversation context is ready (has valid project data)
+  const [isReady, setIsReady] = useState(false);
 
-  // Add debugging logs
+  // Add console.logging logs
   useEffect(() => {
-    console.log('🔍 DEBUG: ConversationProvider initialized with:');
-    console.log('🔍 DEBUG: - projectId:', projectId, typeof projectId);
-    console.log('🔍 DEBUG: - currentBranchId:', currentBranchId, typeof currentBranchId);
-  }, [projectId, currentBranchId]);
+    if (projectId && !projectLoading) {
+      console.log('🔍 console.log: ConversationProvider initialized with:');
+      console.log('🔍 console.log: - projectId:', projectId, typeof projectId);
+      console.log('🔍 console.log: - currentBranchId:', currentBranchId, typeof currentBranchId);
+      console.log('🔍 console.log: - projectLoading:', projectLoading);
+      console.log('🔍 console.log: - mainBranchId:', mainBranchId);
+    }
+  }, [projectId, currentBranchId, projectLoading, mainBranchId]);
+
+  // Check if conversation context is ready
+  useEffect(() => {
+    if (projectId && !projectLoading) {
+      setIsReady(true);
+    } else {
+      setIsReady(false);
+    }
+  }, [projectId, projectLoading]);
 
   // Reset state when project changes
   useEffect(() => {
+    if (!projectId) return;     
     // Clear state when project changes
     setBranches([]);
     setAllNodes([]);
     setLayoutData(null);
-    setOptimisticMessages([]);
-    setStreamingMessageId(null);
-    setStreamingContent(null);
     
     // Reset to main branch when project changes
     setCurrentBranchId(null);
@@ -199,12 +210,13 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       layout: true,
     });
     
-    // Fetch data for the new project if we have a valid project ID
-    if (projectId) {
+    // Fetch data for the new project if we have a valid project ID AND project loading is complete
+    if (projectId && !projectLoading) {
+      console.log('🔍 console.log: Project is ready, fetching data');
       fetchData();
       fetchLayoutData();
     }
-  }, [projectId]);
+  }, [projectId, projectLoading]);
 
   // Fetch all branches for the project
   const fetchBranches = async (): Promise<Branch[]> => {
@@ -293,9 +305,14 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Main data fetching function
   const fetchData = async (): Promise<void> => {
-    if (!projectId) return;
+    if (!projectId || projectLoading) {
+      console.log('Cannot fetch data - projectId is missing or project is loading');
+      return;
+    }
     
-    console.log('🔍 DEBUG: Fetching data for project:', projectId, 'branch:', currentBranchId || 'main');
+    console.log(`Fetching data for project: ${projectId}, branch: ${currentBranchId || 'main'}`);
+    console.log(`Current streaming state: messageId=${streamingParentId}, contentLength=${streamingContent?.length || 0}`);
+    
     setLoading(prev => ({ ...prev, data: true }));
     
     try {
@@ -305,51 +322,37 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         fetchNodes(),
       ]);
       
-      // Log the data we received
-      console.log('🔍 DEBUG: Fetched data:', {
+      // Enhanced logging
+      console.log('Fetched data:', {
         branchesCount: branchesData.length,
         nodesCount: nodesData.length,
-        hasRootNode: nodesData.some(node => node.type === 'root')
+        hasRootNode: nodesData.some(node => node.type === 'root'),
+        messageCounts: {
+          userMessages: nodesData.filter(n => n.type === 'user-message').length,
+          assistantMessages: nodesData.filter(n => n.type === 'assistant-message').length,
+          roots: nodesData.filter(n => n.type === 'root').length,
+          branchRoots: nodesData.filter(n => n.type === 'branch-root').length,
+          branchPoints: nodesData.filter(n => n.type === 'branch-point').length
+        }
       });
+      
+      // Get unique branch IDs in the data
+      const branchIds = [...new Set(nodesData.map(node => node.branch_id))];
+      console.log('Unique branch IDs in fetched nodes:', branchIds);
+      
+      // Log the available branches
+      console.log('Available branches:', branchesData.map(b => ({ id: b.id, name: b.name })));
       
       // Log the root node if found
       const rootNode = nodesData.find(node => node.type === 'root');
       if (rootNode) {
-        console.log('🔍 DEBUG: Root node in fetched data:', {
+        console.log('Root node in fetched data:', {
           id: rootNode.id,
           branch_id: rootNode.branch_id,
           type: rootNode.type
         });
-      }
-      
-      // Cleanup optimistic messages that now have real versions
-      if (optimisticMessages.length > 0) {
-        setTimeout(() => {
-          const updatedOptimisticMessages = optimisticMessages.filter(optMsg => {
-            // For user messages, check if a real message with same content exists
-            if (optMsg.type === 'user-message') {
-              return !nodesData.some((realMsg: TimelineNode) => 
-                realMsg.type === 'user-message' && 
-                (realMsg.message_text === optMsg.message_text || realMsg.id === optMsg.id)
-              );
-            }
-            
-            // For AI messages, keep if still streaming
-            if (optMsg.type === 'assistant-message') {
-              if (optMsg.isLoading) return true;
-              if (optMsg.id === streamingMessageId && streamingContent !== null) return true;
-              
-              return !nodesData.some((realMsg: TimelineNode) => 
-                realMsg.type === 'assistant-message' &&
-                (realMsg.parent_id === optMsg.parent_id || realMsg.id === optMsg.id)
-              );
-            }
-            
-            return true;
-          });
-          
-          setOptimisticMessages(updatedOptimisticMessages);
-        }, 100);
+      } else {
+        console.log('WARNING: No root node found in fetched data');
       }
     } catch (error) {
       console.error('Failed to fetch data:', error);
@@ -418,277 +421,190 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     }
   };
 
-  // Handle optimistic updates for new messages
-  const handleOptimisticUpdate = useCallback((newMessages: TimelineNode[]) => {
-    console.log('Adding optimistic messages:', newMessages);
-    
-    // Get the streaming message ID if any
-    const aiMessage = newMessages.find(m => m.type === 'assistant-message' && m.optimistic);
-    if (aiMessage) {
-      setStreamingMessageId(aiMessage.id);
+  // Simplified updateStreamingContent function
+  const updateStreamingContent = (content: string | null) => {
+    // If content is null, it means streaming has ended
+    if (content === null) {
+      console.log('Streaming has ended, fetching data immediately');
+      
+      // Clear streaming state
+      setIsStreaming(false);
+      setStreamingContent(null);
+      
+      // Fetch data to get the real message
+      fetchData();
+    } else {
+      // Just update the streaming content
+      setStreamingContent(content);
     }
-    
-    // Update optimistic messages
-    setOptimisticMessages(prev => {
-      // Create a new array to hold updated messages
-      const updated = [...prev];
-      
-      // Process each new message
-      for (const newMsg of newMessages) {
-        // Check if this message already exists in our array
-        const existingIndex = updated.findIndex(msg => msg.id === newMsg.id);
-        
-        if (existingIndex >= 0) {
-          // Update existing message
-          updated[existingIndex] = newMsg;
-        } else {
-          // Add new message
-          updated.push(newMsg);
-        }
-      }
-      
-      return updated;
-    });
-  }, []);
+  };
 
-  // Update streaming content
-  const updateStreamingContent = useCallback((content: string | null) => {
-    setStreamingContent(content);
-  }, []);
-
-  // Create a unified message update function that handles both optimistic UI and streaming updates
-  const updateMessageState = useCallback((params: {
-    action: 'create' | 'update' | 'stream' | 'error';
-    userMessage?: string;
-    parentId?: string;
-    streamContent?: string;
-    messageId?: string;
-    errorMessage?: string;
-  }) => {
-    const { action, userMessage, parentId, streamContent, messageId, errorMessage } = params;
-    
-    switch (action) {
-      case 'create': {
-        // Create new optimistic messages (user + empty AI response)
-        if (!userMessage || !parentId) return;
-        
-        const timestamp = new Date().toISOString();
-        const effectiveBranchId = currentBranchId || '';
-        const optimisticUserId = uuidv4();
-        const optimisticAiId = uuidv4();
-        
-        // User message
-        const optimisticUserMessage: TimelineNode = {
-          id: optimisticUserId,
-          project_id: projectId,
-          branch_id: effectiveBranchId,
-          parent_id: parentId,
-          type: 'user-message' as NodeType,
-          message_text: userMessage,
-          message_role: 'user',
-          position: 0,
-          created_by: 'user',
-          created_at: timestamp,
-          optimistic: true
-        };
-        
-        // AI message (empty at first)
-        const optimisticAiMessage: TimelineNode = {
-          id: optimisticAiId,
-          project_id: projectId,
-          branch_id: effectiveBranchId,
-          parent_id: optimisticUserId,
-          type: 'assistant-message' as NodeType,
-          message_text: '',
-          message_role: 'assistant',
-          position: 0,
-          created_by: 'assistant',
-          created_at: timestamp,
-          optimistic: true,
-          isLoading: true
-        };
-        
-        // Add both messages to the UI
-        handleOptimisticUpdate([optimisticUserMessage, optimisticAiMessage]);
-        
-        // Set streaming message ID and initialize content
-        setStreamingMessageId(optimisticAiId);
-        setStreamingContent('');
-        
-        return {
-          optimisticUserId,
-          optimisticAiId,
-          optimisticUserMessage,
-          optimisticAiMessage
-        };
-      }
-      
-      case 'stream': {
-        // Update streaming message content
-        if (streamContent === undefined) return;
-        
-        // Update the streaming content state
-        setStreamingContent(streamContent);
-        
-        // Find the currently streaming message
-        if (streamingMessageId) {
-          // Update the optimistic message with new content
-          setOptimisticMessages(prev => {
-            return prev.map(msg => {
-              if (msg.id === streamingMessageId) {
-                return {
-                  ...msg,
-                  message_text: streamContent,
-                  isLoading: false
-                };
-              }
-              return msg;
-            });
-          });
-        }
-        break;
-      }
-      
-      case 'update': {
-        // Update a specific message
-        if (!messageId) return;
-        
-        setOptimisticMessages(prev => {
-          return prev.map(msg => {
-            if (msg.id === messageId) {
-              return {
-                ...msg,
-                ...(streamContent && { message_text: streamContent }),
-                isLoading: false
-              };
-            }
-            return msg;
-          });
-        });
-        break;
-      }
-      
-      case 'error': {
-        // Show error message in the optimistic AI message
-        const errorText = errorMessage || "I'm sorry, I encountered an error processing your request. Please try again.";
-        
-        setOptimisticMessages(prev => {
-          return prev.map(msg => {
-            // Find the AI message that's loading
-            if (msg.type === 'assistant-message' && (msg.isLoading || msg.id === streamingMessageId)) {
-              return {
-                ...msg,
-                message_text: errorText,
-                isLoading: false
-              };
-            }
-            return msg;
-          });
-        });
-        
-        // Clear streaming state
-        setStreamingMessageId(null);
-        setStreamingContent(null);
-        break;
-      }
-    }
-  }, [currentBranchId, handleOptimisticUpdate, projectId, streamingMessageId]);
-
-  // Now update the sendMessage method to use the new unified update function
+  // Refactored sendMessage method with simplified streaming approach
   const sendMessage = async (text: string): Promise<void> => {
     if (!projectId) throw new Error('No project selected');
     if (!text.trim()) return;
     
     try {
-      // Get the last message to use as parent
-      const lastNode = getLastMessageNode();
-      if (!lastNode) throw new Error('No parent node found');
+      // Find the parent node - get the last node in the current branch regardless of type
+      console.log('Finding parent node for new message');
       
-      // Create optimistic updates using the unified method
-      const optimisticData = updateMessageState({
-        action: 'create',
-        userMessage: text,
-        parentId: lastNode.id
+      // Filter nodes to current branch, or all nodes if no branch is selected
+      const branchNodes = currentBranchId
+        ? allNodes.filter(node => node.branch_id === currentBranchId)
+        : allNodes;
+        
+      if (branchNodes.length === 0) {
+        console.log('No nodes found in this branch or project');
+        throw new Error('Cannot find a parent node to attach message to');
+      }
+      
+      // Sort by position and created_at to find the last node
+      const sortedNodes = [...branchNodes].sort((a, b) => {
+        // First sort by position
+        if (a.position !== b.position) {
+          return b.position - a.position; // Descending order
+        }
+        // If same position, sort by creation date
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       });
       
-      if (!optimisticData) return;
+      const parentNode = sortedNodes[0];
+      //console.log(`Using node as parent: id=${parentNode.id}, type=${parentNode.type}, branch_id=${parentNode.branch_id}`);
       
-      // Submit the message with streaming enabled
-      const response = await fetch('/api/messages', {
+      const parentId = parentNode.id;
+      const targetBranchId = parentNode.branch_id || '';
+      
+      // 1. Save user message directly to database
+      console.log(`Saving user message to database with parent_id: ${parentId}, branch_id: ${targetBranchId}`);
+      const userMessageResponse = await fetch('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: projectId,
-          branch_id: currentBranchId || '',
-          parent_id: lastNode.id,
+          branch_id: targetBranchId,
+          parent_id: parentId,
           text: text.trim(),
-          created_by: 'user',
-          stream: true
+          created_by: 'user'
         })
       });
       
-      // Handle streaming response
-      if (response.headers.get('content-type')?.includes('text/event-stream')) {
-        await processStreamingResponse(
-          response,
-          (streamedText) => {
-            // Use unified method for streaming updates
-            updateMessageState({
-              action: 'stream',
-              streamContent: streamedText
-            });
-          },
-          () => {
-            // When streaming is complete, clear streaming state and refresh data
-            setStreamingMessageId(null);
-            setStreamingContent(null);
-            fetchData();
+      if (!userMessageResponse.ok) {
+        const errorText = await userMessageResponse.text();
+        throw new Error(`Failed to save user message: ${errorText}`);
+      }
+      
+      // Get user message ID from response
+      const userMessageResponseText = await userMessageResponse.text();
+      console.log('Raw user message response:', userMessageResponseText);
+      
+      let userMessageData;
+      try {
+        userMessageData = JSON.parse(userMessageResponseText);
+      } catch (e) {
+        console.error('Failed to parse user message response as JSON:', e);
+        throw new Error('Invalid response from server when saving user message');
+      }
+      
+      // The response structure is { user_message: { id: "..." } }
+      if (!userMessageData || !userMessageData.user_message || !userMessageData.user_message.id) {
+        console.error('User message response is missing expected data structure:', userMessageData);
+        throw new Error('Server did not return a valid message ID');
+      }
+      
+      const userMessageId = userMessageData.user_message.id;
+      console.log(`User message saved with ID: ${userMessageId}`);
+      
+      // 2. Refetch data to update UI with user message
+      await fetchData();
+      
+      // 3. Set streaming flag
+      setIsStreaming(true);
+      setStreamingContent('');
+      setStreamingParentId(userMessageId);
+      console.log(`Started streaming for parent message: ${userMessageId}`);
+      
+      // 4. Make API call for assistant response with streaming
+      console.log(`Requesting assistant response for user message: ${userMessageId}`);
+      
+      // Prepare messages array from displayedChatNodes - only include user and assistant messages
+      const messageHistory = displayedChatNodes
+        .filter(node => node.type === 'user-message' || node.type === 'assistant-message')
+        .map(node => ({
+          role: node.type === 'user-message' ? 'user' : 'assistant',
+          content: node.message_text || ''
+        }));
+      
+      // Add the current user message that we just sent (which may not be in displayedChatNodes yet)
+      messageHistory.push({
+        role: 'user',
+        content: text.trim()
+      });
+      
+      // Create the request payload explicitly for console.logging
+      const requestPayload = {
+        project_id: projectId,
+        parent_id: userMessageId,
+        messages: messageHistory,
+        stream: true
+      };
+      
+      console.log(`Full request payload: ${JSON.stringify(requestPayload)}`);
+      
+      const assistantResponse = await fetch('/api/messages/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestPayload)
+      });
+      
+      // 5. Handle streaming response
+      if (assistantResponse.headers.get('content-type')?.includes('text/event-stream')) {
+        const reader = assistantResponse.body?.getReader();
+        let responseText = '';
+        let done = false;
+        
+        // Reading the stream
+        if (reader) {
+          while (!done) {
+            const { value, done: readerDone } = await reader.read();
+            done = readerDone;
+            
+            if (value) {
+              const chunk = new TextDecoder().decode(value);
+              responseText += chunk;
+              
+              // Update streaming content as we go
+              setStreamingContent(responseText);
+            }
           }
-        );
+          
+          // When streaming is complete, clear state and refetch data
+          console.log(`Streaming complete. Final content length: ${responseText.length}`);
+          updateStreamingContent(null); // This will clear streaming state and fetch data
+        }
       } else {
         // Handle non-streaming response
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Server error: ${response.status} ${errorText}`);
+        if (!assistantResponse.ok) {
+          const errorText = await assistantResponse.text();
+          throw new Error(`Server error: ${assistantResponse.status} ${errorText}`);
         }
         
         // Just refresh data
-        fetchData();
+        console.log('Non-streaming response completed, refreshing data');
+        updateStreamingContent(null);
       }
     } catch (error) {
       console.error('Failed to send message:', error);
-      // Show error message using the unified method
-      updateMessageState({
-        action: 'error',
-        errorMessage: error instanceof Error ? error.message : "Unknown error occurred"
-      });
+      // Reset streaming state
+      setIsStreaming(false);
+      setStreamingContent(null);
+      setStreamingParentId(null);
+      
+      // Show error in UI
+      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+      console.log(`Error in sendMessage: ${errorMessage}`);
     }
   };
   
-  // Get the last message node to use as parent for new messages
-  const getLastMessageNode = (): TimelineNode | null => {
-    if (!allNodes || allNodes.length === 0) return null;
-    
-    // Find messages in the current branch
-    const branchMessages = currentBranchId 
-      ? allNodes.filter(node => node.branch_id === currentBranchId)
-      : allNodes;
-    
-    // First try to find the last user or assistant message
-    const sortedMessages = [...branchMessages]
-      .filter(node => node.type === 'user-message' || node.type === 'assistant-message')
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    
-    if (sortedMessages.length > 0) return sortedMessages[0];
-    
-    // If no messages in current branch, find the branch root or project root
-    const rootNode = currentBranchId
-      ? branchMessages.find(node => node.type === 'branch-root')
-      : allNodes.find(node => node.type === 'root');
-    
-    return rootNode || null;
-  };
-
   // Get branch color based on branch ID
   const getBranchColor = useCallback((branchId: string): string => {
     // First check if we have this branch in our branches list
@@ -725,18 +641,33 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
 
   // Build a path from root to the current branch node
   const getBranchPath = useCallback((targetBranchId: string | null): TimelineNode[] => {
-    if (!allNodes.length) return [];
+    console.log(`Building branch path for targetBranchId: ${targetBranchId}`);
+    if (!allNodes.length) {
+      console.log('No nodes available in allNodes array');
+      return [];
+    }
 
     // If no specific branch is selected, show messages from the main branch
     if (!targetBranchId) {
+      // Make sure we have a valid mainBranchId
+      if (!mainBranchId) {
+        console.log('No mainBranchId available yet, returning empty path');
+        return [];
+      }
+      
       // Find the root node
       const rootNode = allNodes.find(m => m.type === 'root');
-      if (!rootNode) return [];
+      if (!rootNode) {
+        console.log('No root node found in allNodes');
+        return [];
+      }
       
-      const mainBranchId = rootNode.branch_id;
-      return allNodes
+      const mainBranchNodes = allNodes
         .filter(m => m.branch_id === mainBranchId)
         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      
+      console.log(`Found ${mainBranchNodes.length} nodes in main branch (${mainBranchId})`);
+      return mainBranchNodes;
     }
     
     // If a specific branch is selected, build the full path from root to the current branch
@@ -747,26 +678,43 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       .filter(m => m.branch_id === targetBranchId)
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     
-    if (!branchMessages.length) return [];
+    console.log(`Found ${branchMessages.length} nodes in target branch (${targetBranchId})`);
+    
+    if (!branchMessages.length) {
+      console.log(`WARNING: No messages found for branch ${targetBranchId}`);
+      return [];
+    }
     
     // Find the branch in our branches list
     const currentBranch = branches.find(b => b.id === targetBranchId);
-    if (!currentBranch) return branchMessages;
+    if (!currentBranch) {
+      console.log(`WARNING: Branch ${targetBranchId} not found in branches list`);
+      return branchMessages;
+    }
     
     // If this branch has a parent branch, we need to include messages from the parent branch
     if (currentBranch.parent_branch_id) {
+      console.log(`Branch ${targetBranchId} has parent branch ${currentBranch.parent_branch_id}`);
+      
       // Find the branch point node
       const branchPointNode = allNodes.find(m => m.id === currentBranch.branch_point_node_id);
       
       if (branchPointNode) {
+        console.log(`Found branch point node ${branchPointNode.id} for branch ${targetBranchId}`);
+        
         // Recursively build the parent branch path up to the branch point
         const parentPath = getBranchPath(currentBranch.parent_branch_id);
         
         // Only include parent messages up to the branch point
         const branchPointIndex = parentPath.findIndex(m => m.id === branchPointNode.id);
         if (branchPointIndex !== -1) {
+          console.log(`Including ${branchPointIndex + 1} nodes from parent branch path`);
           result.push(...parentPath.slice(0, branchPointIndex + 1));
+        } else {
+          console.log(`WARNING: Branch point node ${branchPointNode.id} not found in parent path`);
         }
+      } else {
+        console.log(`WARNING: Branch point node not found for branch ${targetBranchId}`);
       }
     }
     
@@ -778,42 +726,65 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
     
+    console.log(`Adding ${sortedMessages.length} sorted messages from branch ${targetBranchId}`);
     result.push(...sortedMessages);
     
-    return result;
-  }, [allNodes, branches]);
-
-  // Get combined messages (real + optimistic)
-  const displayedNodes = useMemo(() => {
-    // Combine real and optimistic messages
-    let combined = [...allNodes];
-    
-    if (optimisticMessages.length > 0) {
-      // Process optimistic messages one by one to avoid duplicates
-      for (const optMsg of optimisticMessages) {
-        // Check if this optimistic message is already represented in allMessages
-        const existsInAll = allNodes.some(m => 
-          // Either exact ID match
-          m.id === optMsg.id ||
-          // Or same content and type in the same branch
-          (m.message_text === optMsg.message_text && 
-           m.type === optMsg.type && 
-           m.branch_id === optMsg.branch_id) ||
-          // Or AI message with the same parent (to catch when content differs but it's the same logical message)
-          (optMsg.type === 'assistant-message' && m.type === 'assistant-message' && 
-           optMsg.parent_id === m.parent_id)
-        );
-        
-        // Only add if it doesn't exist in regular messages
-        if (!existsInAll) {
-          combined.push(optMsg);
-        }
-      }
+    console.log(`Final branch path has ${result.length} nodes`);
+    if (result.length > 0) {
+      console.log('First node:', { type: result[0].type, id: result[0].id });
+      console.log('Last node:', { type: result[result.length-1].type, id: result[result.length-1].id });
     }
     
-    // Apply message path building with combined messages
-    return getBranchPath(currentBranchId);
-  }, [allNodes, optimisticMessages, currentBranchId, getBranchPath]);
+    return result;
+  }, [allNodes, branches, mainBranchId]);
+
+  // Simplified displayedChatNodes calculation
+  const displayedChatNodes = useMemo(() => {
+    if (!projectId) {
+      return [];
+    }
+
+    console.log('Calculating displayedChatNodes');
+    
+    // Get the branch path - nodes that should be displayed for the current branch
+    const branchPathNodes = getBranchPath(currentBranchId);
+    console.log(`getBranchPath returned ${branchPathNodes.length} nodes for branch ${currentBranchId || 'main'}`);
+    
+    // If we're not streaming, just return the branch path
+    if (!isStreaming || !streamingContent || !streamingParentId) {
+      return branchPathNodes;
+    }
+    
+    // Find the parent message (which should be a user message)
+    const parentMessage = branchPathNodes.find(node => node.id === streamingParentId);
+    
+    if (parentMessage) {
+      // Create a temporary assistant message node
+      const tempStreamingNode: TimelineNode = {
+        id: 'streaming-message', // Fixed ID for streaming message
+        project_id: projectId,
+        branch_id: parentMessage.branch_id,
+        type: 'assistant-message',
+        parent_id: parentMessage.id,
+        position: parentMessage.position + 1,
+        message_text: streamingContent,
+        created_at: new Date().toISOString(),
+        created_by: 'assistant',
+        isLoading: false,
+        isStreaming: true,
+        // Add other required fields with default values
+        ...parentMessage.metadata && { metadata: parentMessage.metadata }
+      };
+      
+      // Return nodes with the streaming message appended
+      const result = [...branchPathNodes, tempStreamingNode];
+      console.log(`Added streaming node. Total nodes: ${result.length}`);
+      return result;
+    }
+    
+    // Default: return branch path without streaming
+    return branchPathNodes;
+  }, [projectId, currentBranchId, getBranchPath, isStreaming, streamingContent, streamingParentId]);
 
   // Transform nodes for React Flow (Minimap)
   const getNodesForReactFlow = useCallback(() => {
@@ -1170,8 +1141,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
               data: {
                 color: color, // Use THIS branch's color for the branch point
                 childBranchColor: childBranchData.color, // Use CHILD branch color for handle/arrow
-                branchId: branchId,
-                isActive: isActive,
+                branchId,
+                isActive,
                 isOnActivePath: isActive && activeBranches.has(childBranchConnection.childBranchId),
                 childBranchName: childBranchData.branch.name || 'Branch',
                 childBranchDirection: branchDirection,
@@ -1311,36 +1282,42 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     return { nodes: flowNodes, edges: flowEdges };
   }, [allNodes, branches, currentBranchId, layoutData, getBranchColor]);
 
-  // Set up polling
+  // Fix polling effect to use displayedChatNodes instead of displayedNodes
   useEffect(() => {
-    if (!pollingInterval || !projectId) return;
+    if (!pollingInterval || !projectId || projectLoading) return;
     
     const interval = setInterval(() => {
       // Only poll if we're possibly waiting for an AI response
-      const lastMessage = displayedNodes[displayedNodes.length - 1];
+      const lastMessage = displayedChatNodes.length > 0 ? displayedChatNodes[displayedChatNodes.length - 1] : null;
       if (lastMessage && (lastMessage.type === 'user-message' || (lastMessage.optimistic && lastMessage.isLoading))) {
         fetchData();
       }
     }, pollingInterval);
 
     return () => clearInterval(interval);
-  }, [displayedNodes, pollingInterval, projectId]);
+  }, [displayedChatNodes, pollingInterval, projectId, projectLoading, fetchData]);
 
   // The context value
   const contextValue = useMemo<ConversationContextValue>(() => ({
     // Data
     branches,
     allNodes,
-    displayedNodes,
+    displayedChatNodes,
     layoutData,
     
     // State
     projectId,
     currentBranchId,
-    loading,
-    optimisticMessages,
-    streamingMessageId,
+    loading: {
+      ...loading,
+      // Add projectLoading to our loading state to indicate we're waiting for project data
+      data: loading.data || projectLoading 
+    },
+    
+    // New simplified streaming state
+    isStreaming,
     streamingContent,
+    streamingParentId,
     
     // Actions
     fetchData,
@@ -1348,10 +1325,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     recalculateLayout,
     switchBranch,
     createBranch,
-    handleOptimisticUpdate,
     updateStreamingContent,
     sendMessage,
-    updateMessageState,
     
     // Utility
     getBranchColor,
@@ -1361,28 +1336,42 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   }), [
     branches,
     allNodes,
-    displayedNodes,
+    displayedChatNodes,
     layoutData,
     projectId,
     currentBranchId,
     loading,
-    optimisticMessages,
-    streamingMessageId,
+    projectLoading,
+    // New simplified streaming dependencies
+    isStreaming,
     streamingContent,
+    streamingParentId,
     fetchData,
     fetchLayoutData,
     recalculateLayout,
     switchBranch,
     createBranch,
-    handleOptimisticUpdate,
     updateStreamingContent,
     sendMessage,
-    updateMessageState,
     getBranchColor,
     getBranchName,
     getBranchPath,
     getNodesForReactFlow
   ]);
+
+  // Add ready state to prevent rendering until project is ready
+  if (!isReady) {
+    return (
+      <ConversationContext.Provider 
+        value={{
+          ...contextValue,
+          loading: { ...contextValue.loading, data: true, layout: true }
+        }}
+      >
+        {children}
+      </ConversationContext.Provider>
+    );
+  }
 
   return (
     <ConversationContext.Provider value={contextValue}>

@@ -164,6 +164,7 @@ export interface TimelineNode {
 	metadata?: Record<string, any>;
 	optimistic?: boolean;
 	isLoading?: boolean;
+	isStreaming?: boolean;
 }
 
 // Root node (start of project)

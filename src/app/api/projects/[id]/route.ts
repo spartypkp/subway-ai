@@ -8,7 +8,7 @@ export async function GET(
 	req: Request,
 	context: { params: { id: string; }; }
 ) {
-	const id = context.params.id;
+	const {id} = await context.params;
 	if (!id) {
 		return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
 	}

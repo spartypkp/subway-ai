@@ -18,7 +18,7 @@
  * the ConversationContext for data management and transformations.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -38,18 +38,12 @@ import { GitBranch, MessageSquare, Train, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useConversation,  } from '@/lib/contexts/ConversationContext';
 
+
 // Define props interface
 interface MinimapProps {
   onSelectNode?: (nodeId: string) => void;
 }
 
-// Define custom node types
-const nodeTypes = {
-  stationNode: StationNode,
-  rootNode: RootNode,
-  branchPointNode: BranchPointNode,
-  branchRootNode: BranchRootNode
-};
 
 
 // Custom node for branch points (where branches diverge)
@@ -459,12 +453,20 @@ export function Minimap({ onSelectNode }: MinimapProps) {
     loading
   } = useConversation();
 
+  // Memoize nodeTypes to prevent recreation on each render
+  const memoizedNodeTypes = useMemo(() => ({
+    stationNode: StationNode,
+    rootNode: RootNode,
+    branchPointNode: BranchPointNode,
+    branchRootNode: BranchRootNode
+  }), []);
+
   // ReactFlow state
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [error, setError] = useState<string | null>(null);
   const [showBranchLabels, setShowBranchLabels] = useState(false);
-  const reactFlowInstance = useReactFlow();
+  
   
   // Update nodes and edges when data changes
   useEffect(() => {
@@ -481,24 +483,7 @@ export function Minimap({ onSelectNode }: MinimapProps) {
     }
   }, [getNodesForReactFlow, setNodes, setEdges]);
   
-  // Handle initial data loading
-  useEffect(() => {
-    const initialLoad = async () => {
-      if (!projectId) return;
-      
-      try {
-        // First try to fetch layout data (already handled by context)
-        await fetchLayoutData();
-        // Then load all data
-        await fetchData();
-      } catch (err) {
-        console.error('Error during initial data load:', err);
-        setError('Failed to load subway map data');
-      }
-    };
-    
-    initialLoad();
-  }, [projectId, fetchLayoutData, fetchData]);
+
   
   // Handle node selection
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
@@ -714,7 +699,7 @@ export function Minimap({ onSelectNode }: MinimapProps) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
-        nodeTypes={nodeTypes}
+        nodeTypes={memoizedNodeTypes}
         fitView
         minZoom={0.2}
         maxZoom={1.5}

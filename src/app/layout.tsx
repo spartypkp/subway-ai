@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { ProjectProvider } from "@/lib/contexts/ProjectContext";
-import { ConversationProvider } from "@/lib/contexts/ConversationContext";
-import { ReactFlowProvider } from "reactflow";
+import ClientProviders from "@/components/providers/ClientProviders";
+
 
 const geistSans = Geist({
 	variable: "--font-geist-sans",
@@ -20,24 +19,14 @@ export const metadata: Metadata = {
 	description: "Give me money VCs",
 };
 
-export default function RootLayout({
-	children,
-}: Readonly<{
-	children: React.ReactNode;
-}>) {
-	return (
-		<html lang="en">
-			<body
-				className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-			>
-				<ProjectProvider>
-					<ConversationProvider>
-						<ReactFlowProvider>
-							{children}
-						</ReactFlowProvider>
-					</ConversationProvider>
-				</ProjectProvider>
-			</body>
-		</html>
-	);
-}
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+    return (
+      <html lang="en">
+        <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+          <ClientProviders>
+            {children}
+          </ClientProviders>
+        </body>
+      </html>
+    );
+  }
