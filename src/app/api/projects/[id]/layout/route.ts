@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
-import SubwayLayoutService from '@/lib/layout/subwayLayoutService';
-
+import ElkLayoutService from '@/lib/layout/elkLayoutService';
+import SlotBasedLayoutService from '@/lib/layout/slotBasedLayoutService';
 /**
  * POST /api/projects/[id]/layout
  * 
  * Recalculates and updates the layout positions for all branches in a project
- * Uses the SubwayLayoutService to apply tree-aware layout algorithms
+ * Uses the ElkLayoutService to apply tree-aware layout algorithms with better
+ * collision avoidance.
  * 
  * @param req NextRequest with project ID in params
  * @returns Updated layout information
@@ -38,8 +39,9 @@ export async function POST(
       );
     }
     
-    // Use layout service to recalculate and update branch layouts
-    const layoutService = new SubwayLayoutService();
+    // Use ELK layout service to recalculate and update branch layouts
+    //const layoutService = new ElkLayoutService();
+    const layoutService = new SlotBasedLayoutService();
     await layoutService.updateBranchPositions(projectId);
     
     // Return success response

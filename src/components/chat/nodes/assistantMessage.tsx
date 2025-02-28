@@ -16,7 +16,7 @@ interface AssistantMessageProps {
     branchColor: string;
     stationNumber: number;
     onMessageSelect: (messageId: string) => void;
-    onBranchClick: (messageId: string) => void;
+    onBranchClick: (messageId: string, yValue: number) => void;
     hasBranchOptions?: boolean;
     branchPointInfo?: BranchPointInfo;
     getBranchSwitchTarget?: (branchPointInfo: BranchPointInfo | undefined, currentBranchId: string | null) => any;
@@ -97,7 +97,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
                                 const switchTarget = getBranchSwitchTarget(branchPointInfo, currentBranchId);
                                 return switchTarget ? (
                                     <>
-                                        
+                                        {/* Horizontal branch line with transition */}
                                         <div
                                             className="absolute h-3"
                                             style={{
@@ -218,7 +218,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
                                             className="h-6 px-2 text-xs hover:bg-background rounded-full border border-transparent hover:border-muted"
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                onBranchClick(node.id);
+                                                onBranchClick(node.id, node.metadata?.y_value || 0);
                                             }}
                                         >
                                             <GitBranch className="h-3 w-3 mr-1" />

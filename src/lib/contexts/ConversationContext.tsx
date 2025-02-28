@@ -1,7 +1,7 @@
 "use client";
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import { Branch, TimelineNode, NodeType } from '@/lib/types/database';
-import { BranchLayout } from '@/lib/layout/subwayLayoutService';
+
 import { useProject } from './ProjectContext';
 import { Edge, Node } from 'reactflow';
 import { v4 as uuidv4 } from 'uuid';
@@ -96,8 +96,6 @@ interface ConversationContextValue {
   allNodes: TimelineNode[];
   
   displayedChatNodes: TimelineNode[];
-
-  layoutData: Record<string, BranchLayout> | null;
   
   // State
   projectId: string;
@@ -114,7 +112,6 @@ interface ConversationContextValue {
   
   // Actions
   fetchData: () => Promise<void>;
-  fetchLayoutData: () => Promise<void>;
   recalculateLayout: () => Promise<void>;
   switchBranch: (branchId: string | null) => void;
   createBranch: (params: {
@@ -154,7 +151,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   // Data state
   const [branches, setBranches] = useState<Branch[]>([]);
   const [allNodes, setAllNodes] = useState<TimelineNode[]>([]);
-  const [layoutData, setLayoutData] = useState<Record<string, BranchLayout> | null>(null);
   
   // UI state
   const [currentBranchId, setCurrentBranchId] = useState<string | null>(null);
@@ -199,7 +195,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     // Clear state when project changes
     setBranches([]);
     setAllNodes([]);
-    setLayoutData(null);
     
     // Reset to main branch when project changes
     setCurrentBranchId(null);
@@ -214,7 +209,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     if (projectId && !projectLoading) {
       console.log('🔍 console.log: Project is ready, fetching data');
       fetchData();
-      fetchLayoutData();
     }
   }, [projectId, projectLoading]);
 
@@ -257,25 +251,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     }
   };
 
-  // Fetch layout data for branches
-  const fetchLayoutData = async (): Promise<void> => {
-    if (!projectId) return;
-    
-    setLoading(prev => ({ ...prev, layout: true }));
-    try {
-      const response = await fetch(`/api/projects/${projectId}/layout`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch layout data: ${response.status}`);
-      }
-      const data = await response.json();
-      setLayoutData(data);
-    } catch (error) {
-      console.error('Failed to fetch layout data:', error);
-    } finally {
-      setLoading(prev => ({ ...prev, layout: false }));
-    }
-  };
-
   // Recalculate layout for all branches
   const recalculateLayout = async (): Promise<void> => {
     if (!projectId) return;
@@ -294,8 +269,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         throw new Error(`Failed to recalculate layout: ${response.status}`);
       }
       
-      // Fetch the updated layout data
-      await fetchLayoutData();
+      // Fetch the updated branches which will include the new layout data in metadata
+      await fetchBranches();
     } catch (error) {
       console.error('Failed to recalculate layout:', error);
     } finally {
@@ -410,9 +385,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       
       // Refresh data after creating branch
       await fetchData();
-      
-      // Also refresh layout since we have a new branch
-      await fetchLayoutData();
       
       return result.id;
     } catch (error) {
@@ -832,9 +804,9 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       let yOffset = 0;
       let direction: 'left' | 'right' | 'auto' = 'auto';
       
-      // If we have layout data for this branch, use it
-      if (layoutData && layoutData[branch.id]) {
-        const layout = layoutData[branch.id];
+      // If we have layout data in branch metadata, use it
+      if (branch.metadata?.layout) {
+        const layout = branch.metadata.layout;
         
         // Apply proper coordinate scaling from layout service to ReactFlow
         xPosition = centerX + (layout.x * xScaleFactor);
@@ -848,13 +820,20 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         // Fall back to the old calculation method
         if (branch.depth === 0) {
           xPosition = centerX; // Main branch in center
-          direction = 'right'; // Default direction for main branch
-        } else if (branch.depth % 2 === 1) {
-          xPosition = centerX + (Math.ceil(branch.depth / 2) * branchSpacing);
-          direction = 'right';
         } else {
-          xPosition = centerX - (branch.depth / 2 * branchSpacing);
-          direction = 'left';
+          // Alternate branches left and right of center
+          const siblingIndex = branches
+            .filter(b => b.parent_branch_id === branch.parent_branch_id)
+            .findIndex(b => b.id === branch.id);
+          
+          const isEven = siblingIndex % 2 === 0;
+          const offset = Math.ceil((siblingIndex + 1) / 2) * branchSpacing;
+          
+          xPosition = isEven 
+            ? centerX + offset // Even siblings go right
+            : centerX - offset; // Odd siblings go left
+          
+          direction = isEven ? 'right' : 'left';
         }
       }
       
@@ -948,8 +927,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         
         // Get direction from layout data if available
         let direction: 'left' | 'right' | 'auto' | undefined = undefined;
-        if (layoutData && layoutData[branch.id]) {
-          direction = layoutData[branch.id].direction;
+        if (branch.metadata?.layout) {
+          direction = branch.metadata.layout.direction;
         }
         
         branchConnections.push({
@@ -963,6 +942,11 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         });
       }
     });
+    
+    // Map to store actual branch point Y positions for use in positioning branch roots
+    const branchPointYPositions = new Map<string, number>();
+    // Map to store branch root Y positions for use in positioning stations
+    const branchRootYPositions = new Map<string, number>();
     
     // Process each branch to create subway lines with stations
     branchMap.forEach((branchData, branchId) => {
@@ -1054,8 +1038,19 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
         const connection = branchConnections.find(c => c.branchRootId === branchRoot.id);
         
         if (connection) {
-          // Calculate branch root Y position (same as the branch point)
-          branchRootYPosition = 150 + (connection.position * 100);
+          // Check if the branch point has a calculated Y position already
+          const parentBranchPointY = branchPointYPositions.get(connection.branchPointId);
+          
+          if (parentBranchPointY) {
+            // Use the exact Y position of the branch point
+            branchRootYPosition = parentBranchPointY;
+          } else {
+            // Calculate based on position in the parent branch
+            branchRootYPosition = 150 + (connection.position * 100);
+          }
+          
+          // Store the branch root Y position for future reference
+          branchRootYPositions.set(branchId, branchRootYPosition);
           
           // Add the branch root node - BranchRootNode is 28px wide
           flowNodes.push({
@@ -1150,6 +1145,9 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
                 siblingIndex: childBranchData.branch.metadata?.siblingIndex || 0
               } as BranchPointNodeData
             });
+            
+            // Store the actual Y position of this branch point for its child branch to reference
+            branchPointYPositions.set(station.branchPoint.id, station.yPosition);
             
             // Connect previous node to branch point - ensure perfectly vertical line
             if (previousNodeId) {
@@ -1279,8 +1277,24 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
       });
     });
     
+    // Fix for already created branch roots - update their positions based on branch point positions
+    flowNodes.forEach(node => {
+      if (node.type === 'branchRootNode') {
+        // Find the connection for this branch root
+        const connection = branchConnections.find(c => c.branchRootId === node.id);
+        if (connection) {
+          // Get the actual Y position of the branch point
+          const branchPointY = branchPointYPositions.get(connection.branchPointId);
+          if (branchPointY !== undefined) {
+            // Update the branch root Y position to match the branch point
+            node.position.y = branchPointY;
+          }
+        }
+      }
+    });
+    
     return { nodes: flowNodes, edges: flowEdges };
-  }, [allNodes, branches, currentBranchId, layoutData, getBranchColor]);
+  }, [allNodes, branches, currentBranchId, getBranchColor]);
 
   // Fix polling effect to use displayedChatNodes instead of displayedNodes
   useEffect(() => {
@@ -1303,25 +1317,19 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     branches,
     allNodes,
     displayedChatNodes,
-    layoutData,
     
     // State
     projectId,
     currentBranchId,
-    loading: {
-      ...loading,
-      // Add projectLoading to our loading state to indicate we're waiting for project data
-      data: loading.data || projectLoading 
-    },
+    loading,
     
-    // New simplified streaming state
+    // Simplified streaming state
     isStreaming,
     streamingContent,
     streamingParentId,
     
     // Actions
     fetchData,
-    fetchLayoutData,
     recalculateLayout,
     switchBranch,
     createBranch,
@@ -1337,7 +1345,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     branches,
     allNodes,
     displayedChatNodes,
-    layoutData,
     projectId,
     currentBranchId,
     loading,
@@ -1347,7 +1354,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     streamingContent,
     streamingParentId,
     fetchData,
-    fetchLayoutData,
     recalculateLayout,
     switchBranch,
     createBranch,

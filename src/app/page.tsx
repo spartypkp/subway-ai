@@ -63,7 +63,7 @@ export default function Home() {
 	const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 	const [branchReason, setBranchReason] = useState('');
 	const [creatingBranch, setCreatingBranch] = useState(false);
-
+	
 	// Get project data from ProjectContext
 	const { 
 		projects, 
@@ -148,6 +148,7 @@ export default function Home() {
 				branchPointNodeId: selectedMessageId as string,
 				name: branchReason || undefined,
 				createdBy: 'user'
+               
 			});
 
 			// Reset dialog state

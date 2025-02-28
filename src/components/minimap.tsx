@@ -34,9 +34,10 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Branch } from '@/lib/types/database';
-import { GitBranch, MessageSquare, Train, RefreshCw } from 'lucide-react';
+import { GitBranch, MessageSquare, Train, RefreshCw, Bug } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useConversation,  } from '@/lib/contexts/ConversationContext';
+import { ElkDebug } from './elk-debug';
 
 
 // Define props interface
@@ -447,7 +448,6 @@ export function Minimap({ onSelectNode }: MinimapProps) {
     branches,
     switchBranch,
     fetchData,
-    fetchLayoutData,
     recalculateLayout,
     getNodesForReactFlow,
     loading
@@ -466,6 +466,7 @@ export function Minimap({ onSelectNode }: MinimapProps) {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [error, setError] = useState<string | null>(null);
   const [showBranchLabels, setShowBranchLabels] = useState(false);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
   
   
   // Update nodes and edges when data changes
@@ -632,21 +633,19 @@ export function Minimap({ onSelectNode }: MinimapProps) {
       `}</style>
       
       {/* Recalculate layout button */}
-      <div className="absolute top-4 left-4 z-10">
+      <div className="absolute top-4 left-4 z-10 flex gap-2">
+        
+        
+        {/* Debug Panel Toggle */}
         <button
           className={cn(
             "bg-white p-2 rounded-md shadow-sm border border-gray-200 text-xs text-muted-foreground hover:bg-gray-50 transition-colors",
-            loading.layout ? "opacity-70 cursor-not-allowed" : ""
+            showDebugPanel ? "bg-blue-50 text-blue-600 border-blue-200" : ""
           )}
-          onClick={() => recalculateLayout()}
-          disabled={loading.layout}
-          title="Recalculate branch layout"
+          onClick={() => setShowDebugPanel(!showDebugPanel)}
+          title="Toggle debug panel"
         >
-          <RefreshCw 
-            size={16} 
-            className={loading.layout ? "animate-spin" : ""} 
-          />
-          {loading.layout && <span className="sr-only">Calculating layout...</span>}
+          <Bug size={16} />
         </button>
       </div>
       
@@ -690,6 +689,13 @@ export function Minimap({ onSelectNode }: MinimapProps) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+      
+      {/* ELK Debug Panel */}
+      {showDebugPanel && (
+        <div className="absolute left-4 bottom-4 z-10">
+          <ElkDebug />
         </div>
       )}
       
