@@ -23,7 +23,7 @@ export const BranchPoint: React.FC<BranchPointProps> = ({
   const isOnChildBranch = currentBranchId === branchPointInfo.childBranchId;
   
   // Determine which branch continues vertically (current branch) and which goes to the side
-  const mainLineColor = isOnChildBranch ? branchPointInfo.childBranchColor : branchPointInfo.parentBranchColor;
+  const bottomLineColor = isOnChildBranch ? branchPointInfo.childBranchColor : branchPointInfo.parentBranchColor;
   const sideLineColor = isOnChildBranch ? branchPointInfo.parentBranchColor : branchPointInfo.childBranchColor;
   const sideLineBranchName = isOnChildBranch ? getBranchName(branchPointInfo.parentBranchId) : getBranchName(branchPointInfo.childBranchId);
   const targetBranchId = isOnChildBranch ? branchPointInfo.parentBranchId : branchPointInfo.childBranchId;
@@ -38,8 +38,26 @@ export const BranchPoint: React.FC<BranchPointProps> = ({
       data-child-branch={branchPointInfo.childBranchId}
       data-current-view={isOnChildBranch ? 'child' : 'parent'}
     >
-      {/* Continuous vertical track that runs through the entire component */}
-      <div className="absolute left-1/2 top-0 bottom-0 transform -translate-x-1/2 z-0" style={{ width: "2.5px", background: mainLineColor }} />
+      {/* Split track implementation */}
+      {/* Top half - always parent branch color */}
+      <div 
+        className="absolute left-1/2 top-0 transform -translate-x-1/2 z-0" 
+        style={{ 
+          width: "2.5px", 
+          background: branchPointInfo.parentBranchColor,
+          height: "50%"
+        }} 
+      />
+      
+      {/* Bottom half - depends on which branch we're viewing */}
+      <div 
+        className="absolute left-1/2 bottom-0 transform -translate-x-1/2 z-0" 
+        style={{ 
+          width: "2.5px", 
+          background: bottomLineColor,
+          height: "50%" 
+        }} 
+      />
 
       <div className="flex items-center justify-center w-full relative py-8">
         {/* Branch point node with parent branch color */}

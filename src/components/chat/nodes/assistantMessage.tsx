@@ -89,7 +89,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
             />
 
             <div className="relative w-full">
-                {/* Branch line extending to the side if this is a branch point */}
+                
                 {hasBranchOptions && branchPointInfo && getBranchSwitchTarget && (
                     <div className="absolute left-1/2 top-1/2 transform -translate-y-1/2 z-0">
                         <div className="relative">
@@ -97,7 +97,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
                                 const switchTarget = getBranchSwitchTarget(branchPointInfo, currentBranchId);
                                 return switchTarget ? (
                                     <>
-                                        {/* Horizontal branch line with transition */}
+                                        
                                         <div
                                             className="absolute h-3"
                                             style={{
