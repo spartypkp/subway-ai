@@ -4,6 +4,7 @@ import { ReactFlowProvider } from "reactflow";
 import { ProjectProvider } from "@/lib/contexts/ProjectContext";
 import { ConversationProvider } from "@/lib/contexts/ConversationContext";
 import React from "react";
+import { Toaster } from "@/components/ui/toaster";
 
 // Create a bridge component that checks if project is loaded before rendering conversation
 const ConversationBridge = ({ children }: { children: React.ReactNode }) => {
@@ -21,6 +22,7 @@ export default function ClientProviders({ children }: { children: React.ReactNod
         <ConversationBridge>
           {children}
         </ConversationBridge>
+        <Toaster />
       </ProjectProvider>
     </ReactFlowProvider>
   );

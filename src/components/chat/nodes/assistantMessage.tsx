@@ -219,7 +219,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
                 {/* Branch buttons with disabled states */}
                 {!isStreaming && (
                     <div className="flex items-center justify-between gap-2">
-                        {branchPointInfo?.branches?.left && (
+                        {!branchPointInfo?.branches?.left && (
                             <TooltipProvider>
                                 <Tooltip>
                                     <TooltipTrigger asChild>
@@ -230,13 +230,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
                                                 e.stopPropagation();
                                                 onBranchClick(node.id, 'left');
                                             }}
-                                            className={cn(
-                                                "h-6 w-6 p-0 rounded-full",
-                                                branchPointInfo?.branches?.left
-                                                    ? "opacity-40 cursor-not-allowed"
-                                                    : "hover:bg-background hover:border border-muted"
-                                            )}
-                                            disabled={!!branchPointInfo?.branches?.left}
+                                            className="h-6 w-6 p-0 rounded-full hover:bg-background hover:border border-muted"
                                         >
                                             <div className="flex items-center gap-1">
                                                 <ArrowLeftCircle className="h-3.5 w-3.5" />
@@ -245,18 +239,13 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
                                         </Button>
                                     </TooltipTrigger>
                                     <TooltipContent side="top">
-                                        {branchPointInfo?.branches?.left
-                                            ? "Branch already exists"
-                                            : "Branch left"}
+                                        Branch left
                                     </TooltipContent>
                                 </Tooltip>
                             </TooltipProvider>
                         )}
 
-
-                        {branchPointInfo?.branches?.right && (
-
-
+                        {!branchPointInfo?.branches?.right && (
                             <TooltipProvider>
                                 <Tooltip>
                                     <TooltipTrigger asChild>
@@ -267,25 +256,16 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
                                                 e.stopPropagation();
                                                 onBranchClick(node.id, 'right');
                                             }}
-                                            className={cn(
-                                                "h-6 w-6 p-0 rounded-full",
-                                                branchPointInfo?.branches?.right
-                                                    ? "opacity-40 cursor-not-allowed"
-                                                    : "hover:bg-background hover:border border-muted"
-                                            )}
-                                            disabled={!!branchPointInfo?.branches?.right}
+                                            className="h-6 w-6 p-0 rounded-full hover:bg-background hover:border border-muted"
                                         >
                                             <div className="flex items-center gap-1">
-
                                                 <span className="text-xs">New Branch</span>
                                                 <ArrowRightCircle className="h-3.5 w-3.5" />
                                             </div>
                                         </Button>
                                     </TooltipTrigger>
                                     <TooltipContent side="top">
-                                        {branchPointInfo?.branches?.right
-                                            ? "Branch already exists"
-                                            : "Branch right"}
+                                        Branch right
                                     </TooltipContent>
                                 </Tooltip>
                             </TooltipProvider>

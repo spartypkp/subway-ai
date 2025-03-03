@@ -34,10 +34,27 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Branch } from '@/lib/types/database';
-import { GitBranch, MessageSquare, Train, RefreshCw, Bug } from 'lucide-react';
+import { GitBranch, MessageSquare, Train, RefreshCw, Bug, MoreHorizontal, PenLine, Trash2, Info, GitMerge, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useConversation,  } from '@/lib/contexts/ConversationContext';
 import { ElkDebug } from './elk-debug';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { toast } from "@/components/ui/use-toast";
 
 
 // Define props interface
@@ -49,48 +66,50 @@ interface MinimapProps {
 
 // Custom node for branch points (where branches diverge)
 function BranchPointNode({ data }: NodeProps) {
-  // Determine which way the branch is going (left or right)
-  const isRightBranch = data.childBranchDirection === 'right';
+  // Use the detailed data from childBranches array
+  const { childBranches = [], color, isActive, isOnActivePath } = data;
   
-  // Show an indicator if this point has multiple children
-  const hasMultipleChildren = data.childCount > 1;
+  // Count child branches
+  const childCount = childBranches.length;
+  const hasMultipleChildren = childCount > 1;
   
   return (
     <div 
       className={cn(
         "p-1 rounded-full shadow-md flex items-center justify-center bg-white transition-all duration-300",
-        data.isActive ? "ring-2 ring-offset-1 shadow-lg" : "hover:shadow-md",
-        data.isOnActivePath ? "scale-110" : "",
+        isActive ? "ring-2 ring-offset-1 shadow-lg" : "hover:shadow-md",
+        isOnActivePath ? "scale-110" : "",
         hasMultipleChildren ? "ring-1 ring-offset-1" : ""
       )}
       style={{ 
-        borderColor: data.color,
-        border: `2px solid ${data.color}`,
+        borderColor: color,
+        border: `2px solid ${color}`,
         width: '32px',
         height: '32px',
-        background: data.isActive ? '#f8fafc' : 'white',
-        boxShadow: data.isOnActivePath ? `0 0 8px rgba(${hexToRgb(data.childBranchColor || data.color)}, 0.5)` : undefined,
+        background: isActive ? '#f8fafc' : 'white',
+        boxShadow: isOnActivePath ? `0 0 8px rgba(${hexToRgb(color)}, 0.5)` : undefined,
       }}
-      title={`Branch point to: ${data.childBranchName || 'another branch'}${hasMultipleChildren ? ` (+ ${data.childCount - 1} more)` : ''}`}
+      title={`Branch point with ${childCount} ${childCount === 1 ? 'branch' : 'branches'}`}
     >
-      <GitBranch size={16} style={{ color: data.color, transform: isRightBranch ? 'scaleX(1)' : 'scaleX(-1)' }} />
+      <GitBranch size={16} style={{ color: color }} />
       
       {/* Show a small indicator for multiple branches */}
       {hasMultipleChildren && (
         <div className="absolute -bottom-1 -right-1 bg-gray-100 rounded-full w-4 h-4 border border-gray-300 flex items-center justify-center">
-          <span className="text-[8px] font-bold text-gray-700">{data.childCount}</span>
+          <span className="text-[8px] font-bold text-gray-700">{childCount}</span>
         </div>
       )}
       
+      {/* Main branch continuation handles */}
       <Handle 
         id="target-main"
         type="target" 
         position={Position.Top} 
         style={{ 
-          background: data.color, 
+          background: color, 
           width: '8px', 
           height: '8px',
-          top: '-4px', // Position exactly at the top center
+          top: '-4px',
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 1
@@ -101,33 +120,523 @@ function BranchPointNode({ data }: NodeProps) {
         type="source" 
         position={Position.Bottom} 
         style={{ 
-          background: data.color, 
+          background: color, 
           width: '8px', 
           height: '8px',
-          bottom: '-4px', // Position exactly at the bottom center
+          bottom: '-4px',
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 1
         }}
       />
       
-      {/* Dynamically place the branch handle based on direction */}
+      {/* Dynamically render handles for each child branch */}
+      {childBranches.map((branch: {
+        branchId: string;
+        branchColor: string;
+        branchName: string;
+        direction: 'left' | 'right' | 'auto';
+        isOnActivePath: boolean;
+        handleId?: string;
+      }, index: number) => {
+        const direction = branch.direction === 'auto' 
+          ? (index % 2 === 0 ? 'right' : 'left') 
+          : branch.direction;
+        
+        const position = direction === 'right' ? Position.Right : Position.Left;
+        
+        return (
       <Handle 
-        id={isRightBranch ? "right" : "left"}
+            key={branch.handleId || `branch-${index}`}
+            id={branch.handleId || direction}
         type="source" 
-        position={isRightBranch ? Position.Right : Position.Left} 
+            position={position}
         style={{ 
-          background: data.childBranchColor || data.color, 
+              background: branch.branchColor, 
           width: '8px', 
           height: '8px',
           borderWidth: '2px',
           borderColor: 'white',
-          [isRightBranch ? 'right' : 'left']: '-4px', // Position exactly at the edge center
-          top: '50%',
+              [direction === 'right' ? 'right' : 'left']: '-4px',
+              // For multiple handles on the same side, offset them slightly
+              top: hasMultipleChildren 
+                ? `${40 + (index * 15)}%` 
+                : '50%',
           transform: 'translateY(-50%)',
-          zIndex: 1
-        }} 
-      />
+              zIndex: 1,
+              opacity: branch.isOnActivePath ? 1 : 0.75
+            }} 
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// Branch management menu component
+function BranchManagementMenu({ 
+  branchId, 
+  branchName, 
+  color, 
+  onClose 
+}: { 
+  branchId: string, 
+  branchName: string, 
+  color: string,
+  onClose: () => void
+}) {
+  const [activeTab, setActiveTab] = useState<'rename' | 'notes' | 'merge' | null>(null);
+  const [newName, setNewName] = useState(branchName);
+  const [notes, setNotes] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // Get conversation context for branch operations
+  const { 
+    fetchData,
+    recalculateLayout,
+    switchBranch,
+    currentBranchId
+  } = useConversation();
+
+  // Get the project id
+  const projectId = typeof window !== 'undefined' ? localStorage.getItem('currentProjectId') : null;
+  
+  const handleRename = async () => {
+    if (!newName.trim() || newName === branchName) {
+      onClose();
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      // Call API to update branch name
+      const response = await fetch(`/api/branches/${branchId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          name: newName,
+          projectId 
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to rename branch');
+      }
+      
+      // Refresh data
+      await fetchData();
+      await recalculateLayout();
+      
+      toast({
+        title: 'Branch renamed',
+        description: `Branch has been renamed to "${newName}"`,
+      });
+    } catch (error) {
+      console.error('Error renaming branch:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to rename branch. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+      onClose();
+    }
+  };
+  
+  const handleDelete = async () => {
+    // Check if this is the current branch, if so prevent deletion
+    if (branchId === currentBranchId) {
+      toast({
+        title: 'Cannot Delete',
+        description: 'You cannot delete the branch you are currently viewing.',
+        variant: 'destructive',
+      });
+      onClose();
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      // Call API to delete branch
+      const response = await fetch(`/api/branches/${branchId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ projectId }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to delete branch');
+      }
+      
+      // Refresh data
+      await fetchData();
+      await recalculateLayout();
+      
+      toast({
+        title: 'Branch deleted',
+        description: `Branch "${branchName}" has been deleted`,
+      });
+    } catch (error) {
+      console.error('Error deleting branch:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to delete branch. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+      onClose();
+    }
+  };
+  
+  const handleUpdateNotes = async () => {
+    if (!notes.trim()) {
+      onClose();
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      // Call API to update branch notes
+      const response = await fetch(`/api/branches/${branchId}/notes`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          notes,
+          projectId 
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to update branch notes');
+      }
+      
+      // Refresh data
+      await fetchData();
+      
+      toast({
+        title: 'Notes saved',
+        description: 'Branch context notes have been saved',
+      });
+    } catch (error) {
+      console.error('Error updating branch notes:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to save notes. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+      onClose();
+    }
+  };
+  
+  const handleMerge = async () => {
+    setIsLoading(true);
+    try {
+      // Call API to merge branch
+      const response = await fetch(`/api/branches/${branchId}/merge`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          projectId,
+          targetBranchId: 'main' // Merging with main branch
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to merge branch');
+      }
+      
+      // Get the response data - may contain the merged conversation
+      const data = await response.json();
+      
+      // Refresh data
+      await fetchData();
+      await recalculateLayout();
+      
+      // Switch to main branch if available
+      if (data.mainBranchId) {
+        switchBranch(data.mainBranchId);
+      }
+      
+      toast({
+        title: 'Branches merged',
+        description: 'AI has merged this branch with the main conversation',
+      });
+    } catch (error) {
+      console.error('Error merging branch:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to merge branches. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+      onClose();
+    }
+  };
+  
+  return (
+    <div className="branch-management-menu p-3 bg-white min-w-[240px]" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded-full flex-shrink-0" style={{ background: color }} />
+          <h3 className="text-sm font-medium text-gray-800 truncate max-w-[160px]">{branchName || 'Branch'}</h3>
+        </div>
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          className="h-6 w-6 p-0 rounded-full" 
+          onClick={onClose}
+          disabled={isLoading}
+          title="Close"
+        >
+          <X size={14} />
+        </Button>
+      </div>
+      
+      {activeTab === null && (
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex flex-col items-start justify-start gap-1 h-auto py-4 px-3 border border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+            onClick={() => setActiveTab('rename')}
+            disabled={isLoading}
+          >
+            <div className="flex items-center gap-2">
+              <PenLine size={14} className="text-blue-500" />
+              <div className="text-xs font-medium text-gray-900">Rename</div>
+            </div>
+            <div className="text-[10px] text-gray-500">Change branch name</div>
+          </Button>
+          
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex flex-col items-start justify-start gap-1 h-auto py-4 px-3 border border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+            onClick={() => setActiveTab('notes')}
+            disabled={isLoading}
+          >
+            <div className="flex items-center gap-2">
+              <Info size={14} className="text-emerald-500" />
+              <div className="text-xs font-medium text-gray-900">Add Notes</div>
+            </div>
+            <div className="text-[10px] text-gray-500">Context & details</div>
+          </Button>
+          
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex flex-col items-start justify-start gap-1 h-auto py-4 px-3 border border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+            onClick={() => setActiveTab('merge')}
+            disabled={isLoading}
+          >
+            <div className="flex items-center gap-2">
+              <GitMerge size={14} className="text-purple-500" />
+              <div className="text-xs font-medium text-gray-900">Merge</div>
+            </div>
+            <div className="text-[10px] text-gray-500">Combine with main</div>
+          </Button>
+          
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex flex-col items-start justify-start gap-1 h-auto py-4 px-3 border border-rose-100 hover:border-rose-200 hover:bg-rose-50 text-rose-600"
+            onClick={handleDelete}
+            disabled={isLoading || branchId === currentBranchId}
+          >
+            <div className="flex items-center gap-2">
+              <Trash2 size={14} className="text-rose-500" />
+              <div className="text-xs font-medium">Delete</div>
+            </div>
+            <div className="text-[10px] text-rose-500/80">Remove branch</div>
+          </Button>
+        </div>
+      )}
+      
+      {/* Rename interface */}
+      {activeTab === 'rename' && (
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="branch-name" className="text-xs font-medium text-gray-700">Branch Name</Label>
+            <Input 
+              id="branch-name"
+              value={newName} 
+              onChange={(e) => setNewName(e.target.value)} 
+              className="h-9 text-sm rounded-md border-gray-300 focus:border-gray-400 focus:ring-1 focus:ring-gray-400"
+              placeholder="Enter branch name"
+              disabled={isLoading}
+              maxLength={30}
+              autoFocus
+            />
+            <div className="text-[10px] text-gray-500 flex justify-between">
+              <span>Give your branch a descriptive name</span>
+              <span className={cn("", newName.length > 20 ? "text-amber-600" : "text-gray-500")}>
+                {newName.length}/30
+              </span>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button 
+              size="sm" 
+              variant="ghost" 
+              onClick={() => setActiveTab(null)} 
+              disabled={isLoading}
+              className="text-gray-600 hover:text-gray-800"
+            >
+              Cancel
+            </Button>
+            <Button 
+              size="sm" 
+              variant="default"
+              onClick={handleRename} 
+              disabled={isLoading || !newName.trim() || newName === branchName}
+              className="bg-gray-900 hover:bg-gray-800 text-white"
+            >
+              {isLoading ? (
+                <>
+                  <span className="mr-1">Saving</span>
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                </>
+              ) : 'Save'}
+            </Button>
+          </div>
+        </div>
+      )}
+      
+      {/* Notes interface */}
+      {activeTab === 'notes' && (
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="branch-notes" className="text-xs font-medium text-gray-700">Branch Notes</Label>
+            <Textarea 
+              id="branch-notes"
+              value={notes} 
+              onChange={(e) => setNotes(e.target.value)} 
+              placeholder="Add context or details about this branch..."
+              className="min-h-[120px] text-sm rounded-md border-gray-300 resize-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400"
+              disabled={isLoading}
+              maxLength={500}
+              autoFocus
+            />
+            <div className="text-[10px] text-gray-500 flex justify-between">
+              <span>Document the purpose of this branch</span>
+              <span className={cn("", notes.length > 400 ? "text-amber-600" : "text-gray-500")}>
+                {notes.length}/500
+              </span>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button 
+              size="sm" 
+              variant="ghost" 
+              onClick={() => setActiveTab(null)} 
+              disabled={isLoading}
+              className="text-gray-600 hover:text-gray-800"
+            >
+              Cancel
+            </Button>
+            <Button 
+              size="sm"
+              variant="default"
+              onClick={handleUpdateNotes} 
+              disabled={isLoading || !notes.trim()}
+              className="bg-gray-900 hover:bg-gray-800 text-white"
+            >
+              {isLoading ? (
+                <>
+                  <span className="mr-1">Saving</span>
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                </>
+              ) : 'Save Notes'}
+            </Button>
+          </div>
+        </div>
+      )}
+      
+      {/* Merge interface */}
+      {activeTab === 'merge' && (
+        <div className="space-y-4">
+          <div className="bg-purple-50 rounded-md p-3 border border-purple-100">
+            <div className="text-sm text-gray-800 font-medium mb-2 flex items-center gap-2">
+              <GitMerge size={14} className="text-purple-600" />
+              Merge with Main Branch
+            </div>
+            <div className="text-xs text-gray-600">
+              <p>AI will intelligently combine this branch with the main branch, preserving important context and insights.</p>
+            </div>
+          </div>
+          
+          <div className="text-xs space-y-2 text-gray-600">
+            <div className="flex items-start gap-2 mb-1">
+              <div className="h-5 w-5 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-[10px] font-bold text-purple-600">1</span>
+              </div>
+              <div>
+                <span className="font-medium text-gray-700">Analyze conversations</span>
+                <p>Compare and analyze both conversation paths</p>
+              </div>
+            </div>
+            
+            <div className="flex items-start gap-2 mb-1">
+              <div className="h-5 w-5 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-[10px] font-bold text-purple-600">2</span>
+              </div>
+              <div>
+                <span className="font-medium text-gray-700">Integrate key insights</span>
+                <p>Combine important information from both branches</p>
+              </div>
+            </div>
+            
+            <div className="flex items-start gap-2">
+              <div className="h-5 w-5 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-[10px] font-bold text-purple-600">3</span>
+              </div>
+              <div>
+                <span className="font-medium text-gray-700">Create merged history</span>
+                <p>Create a coherent narrative from both paths</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex justify-end gap-2 pt-2">
+            <Button 
+              size="sm" 
+              variant="ghost" 
+              onClick={() => setActiveTab(null)} 
+              disabled={isLoading}
+              className="text-gray-600 hover:text-gray-800"
+            >
+              Cancel
+            </Button>
+            <Button 
+              size="sm"
+              variant="default"
+              onClick={handleMerge} 
+              disabled={isLoading}
+              className="bg-purple-600 hover:bg-purple-700 text-white"
+            >
+              {isLoading ? (
+                <>
+                  <span className="mr-1">Merging</span>
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                </>
+              ) : 'Merge Branch'}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -136,24 +645,57 @@ function BranchPointNode({ data }: NodeProps) {
 function BranchRootNode({ data }: NodeProps) {
   // Determine which way the branch is going
   const isRightBranch = data.branchDirection === 'right';
+  const [showMenu, setShowMenu] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  
+  // Close menu when clicked outside
+  useEffect(() => {
+    if (!showMenu) return;
+    
+    const handleOutsideClick = () => setShowMenu(false);
+    // Small delay to avoid immediate closing
+    const timer = setTimeout(() => {
+      document.addEventListener('click', handleOutsideClick);
+    }, 100);
+    
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('click', handleOutsideClick);
+    };
+  }, [showMenu]);
   
   return (
+    <>
     <div 
       className={cn(
-        "p-1 rounded-full shadow-md flex items-center justify-center bg-white transition-all duration-300",
-        data.isActive ? "ring-2 ring-offset-1 shadow-lg scale-110" : "hover:shadow-md hover:scale-105",
+          "p-1 rounded-full shadow-md flex items-center justify-center bg-white transition-all duration-300 relative cursor-pointer",
+          data.isActive ? "ring-2 ring-offset-1 shadow-lg scale-110" : "",
+          hovered ? "shadow-md scale-105" : "",
       )}
       style={{ 
         borderColor: data.color,
         border: `3px solid ${data.color}`, // Thicker border
-        width: '28px', // Slightly larger
-        height: '28px',
+          width: '30px', // Slightly larger
+          height: '30px',
         background: data.isActive ? '#f8fafc' : 'white', // Subtle background change when active
-        boxShadow: data.isActive ? `0 0 8px rgba(${hexToRgb(data.color)}, 0.5)` : undefined,
-      }}
-      title={`Start of branch: ${data.branchName || 'Branch'}`}
-    >
-      <div className="w-3 h-3 rounded-full" style={{ background: data.color }} />
+          boxShadow: data.isActive || hovered ? `0 0 8px rgba(${hexToRgb(data.color)}, 0.5)` : undefined,
+          zIndex: showMenu ? 1000 : 1,
+        }}
+        title={`Manage branch: ${data.branchName || 'Branch'}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowMenu(!showMenu);
+        }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        <div 
+          className="w-3 h-3 rounded-full transition-all" 
+          style={{ 
+            background: data.color,
+            transform: hovered ? 'scale(1.2)' : 'scale(1)'
+          }} 
+        />
       
       {/* Direction indicator */}
       <div 
@@ -163,6 +705,8 @@ function BranchRootNode({ data }: NodeProps) {
         {isRightBranch ? '→' : '←'}
       </div>
       
+        {/* Only render the left handle if this is a right branch (connects from the left) */}
+        {isRightBranch && (
       <Handle 
         id="left"
         type="target" 
@@ -177,6 +721,26 @@ function BranchRootNode({ data }: NodeProps) {
           zIndex: 1
         }} 
       />
+        )}
+        
+        {/* Only render the right handle if this is a left branch (connects from the right) */}
+        {!isRightBranch && (
+          <Handle 
+            id="right"
+            type="target" 
+            position={Position.Right} 
+            style={{ 
+              background: data.color, 
+              width: '8px', 
+              height: '8px',
+              right: '-4px', // Position exactly at the right center
+              top: '50%',
+              transform: 'translateY(-50%)',
+              zIndex: 1
+            }} 
+          />
+        )}
+        
       <Handle 
         id="target-center"
         type="target" 
@@ -212,29 +776,65 @@ function BranchRootNode({ data }: NodeProps) {
         </div>
       )}
     </div>
+      
+      {/* Branch management menu - positioned above the node */}
+      {showMenu && (
+        <div 
+          className="absolute z-50 bg-white rounded-md shadow-lg border border-gray-200"
+          style={{ 
+            bottom: '120%', // Position above the node
+            left: '50%',
+            transform: 'translateX(-50%)',
+            minWidth: '280px',
+            maxWidth: '320px',
+            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)'
+          }}
+        >
+          <div className="absolute w-4 h-4 bg-white transform rotate-45 left-1/2 -ml-2 -bottom-2 border-r border-b border-gray-200"></div>
+          <BranchManagementMenu 
+            branchId={data.branchId} 
+            branchName={data.branchName || 'Branch'} 
+            color={data.color}
+            onClose={() => setShowMenu(false)}
+          />
+        </div>
+      )}
+    </>
   );
 }
 
 // Custom node for stations (message pairs)
 function StationNode({ data, selected }: NodeProps) {
   const isActive = data.isActive;
-  const [isHovering, setIsHovering] = useState(false);
   
   // Determine node size based on content length
   const hasUserContent = !!data.userContent;
   const hasAssistantContent = !!data.assistantContent;
-  const contentLength = (data.userContent?.length || 0) + (data.assistantContent?.length || 0);
   
-  // Much wider nodes for better visualization
-  const getNodeSize = () => {
-    // Use significantly wider nodes for better visualization
-    return { 
-      width: `${data.calculatedWidth || 140}px`, 
-      height: isHovering ? '90px' : '45px' // Expand height on hover
-    };
+  // Get summary text (either from summary property or extract first sentence from user message)
+  const getSummaryText = () => {
+    // First check if summary exists
+    if (data.summary) {
+      return data.summary;
+    }
+    
+    // Otherwise use first sentence from user message
+    if (data.userContent) {
+      // Find first sentence (ending with period, question mark, or exclamation point)
+      const match = data.userContent.match(/^.*?[.!?](?:\s|$)/);
+      if (match) {
+        return match[0].trim();
+      }
+      // If no sentence ending found, just return a portion of the message
+      return data.userContent.length > 60 
+        ? data.userContent.substring(0, 60) + '...' 
+        : data.userContent;
+    }
+    
+    return 'No content';
   };
   
-  const { width, height } = getNodeSize();
+  const summaryText = getSummaryText();
   
   // Format timestamps if available
   const formattedTime = data.timestamp ? new Date(data.timestamp).toLocaleTimeString([], {
@@ -245,16 +845,10 @@ function StationNode({ data, selected }: NodeProps) {
   // Get the station number for badge display
   const stationNumber = data.stationNumber || '';
   
-  // Prepare tooltip with more extensive content previews
-  const tooltipContent = [
-    data.userContent ? `User: ${data.userContent.substring(0, 150)}${data.userContent.length > 150 ? '...' : ''}` : '',
-    data.assistantContent ? `Assistant: ${data.assistantContent.substring(0, 150)}${data.assistantContent.length > 150 ? '...' : ''}` : ''
-  ].filter(Boolean).join('\n\n');
-  
   return (
     <div 
       className={cn(
-        "px-4 py-2 rounded-lg border-2 flex flex-col items-center justify-center bg-white shadow-md transition-all duration-300",
+        "px-4 py-3 rounded-lg border-2 flex flex-col bg-white shadow-md transition-all duration-300",
         isActive ? "shadow-lg scale-110 ring-2 ring-offset-1" : "hover:shadow-lg hover:scale-105",
         selected ? "ring-2 ring-offset-2 ring-primary" : "",
         !hasUserContent && !hasAssistantContent ? "opacity-70" : "",
@@ -262,23 +856,20 @@ function StationNode({ data, selected }: NodeProps) {
       )}
       style={{ 
         borderColor: data.color,
-        width,
-        height,
+        width: `${data.calculatedWidth || 140}px`,
+        height: '80px', // Fixed taller height for all stations
         boxShadow: isActive ? `0 0 8px rgba(${hexToRgb(data.color)}, 0.5)` : undefined,
-        transition: 'all 0.2s ease-in-out, height 0.15s ease-in-out',
+        transition: 'all 0.2s ease-in-out',
         overflow: 'hidden'
       }}
-      title={tooltipContent}
-      onMouseEnter={() => setIsHovering(true)}
-      onMouseLeave={() => setIsHovering(false)}
       onClick={() => {
         // Add subtle feedback on click
         const el = document.activeElement as HTMLElement;
         if (el) el.blur();
       }}
     >
-      {/* Normal view */}
-      <div className="flex items-center justify-between w-full">
+      {/* Header with station icon and timestamp */}
+      <div className="flex items-center justify-between w-full mb-2">
         {/* Left: Station icon with number badge */}
         <div className="flex items-center flex-shrink-0 mr-2 relative">
           <div 
@@ -292,58 +883,25 @@ function StationNode({ data, selected }: NodeProps) {
           )}
         </div>
         
-        {/* Center: Content preview */}
-        <div className="flex-grow overflow-hidden text-center">
-          {hasUserContent && (
-            <div 
-              className={cn(
-                "text-xs font-medium truncate text-center",
-                isActive ? "font-semibold" : ""
-              )}
-              style={{ color: data.color }}
-            >
-              {data.userContent.length > 30 
-                ? data.userContent.substring(0, 30) + '...' 
-                : data.userContent}
-            </div>
-          )}
-        </div>
-        
         {/* Right: Station time */}
         {formattedTime && (
-          <div className="text-[10px] text-muted-foreground ml-2 flex-shrink-0">
+          <div className="text-[10px] text-muted-foreground flex-shrink-0">
             {formattedTime}
           </div>
         )}
       </div>
       
-      {/* Expanded hover content */}
-      {isHovering && (
-        <div className="w-full mt-2 overflow-hidden animate-fadeIn" style={{ animationDuration: '0.15s' }}>
-          <div className="h-px w-full bg-muted mb-2"></div>
-          
-          {hasUserContent && (
-            <div className="text-xs text-left mb-1 text-ellipsis overflow-hidden">
-              <span className="font-semibold inline-block">User:</span>{' '}
-              <span className="inline-block">{data.userContent.substring(0, 70)}
-              {data.userContent.length > 70 ? '...' : ''}</span>
-            </div>
+      {/* Summary content */}
+      <div className="flex-1 overflow-hidden text-left">
+        <div 
+          className={cn(
+            "text-xs line-clamp-3 leading-tight",
+            isActive ? "font-medium" : ""
           )}
-          
-          {hasAssistantContent && (
-            <div className="text-xs text-left text-muted-foreground text-ellipsis overflow-hidden">
-              <span className="font-semibold inline-block">AI:</span>{' '}
-              <span className="inline-block">{data.assistantContent.substring(0, 70)}
-              {data.assistantContent.length > 70 ? '...' : ''}</span>
+        >
+          {summaryText}
             </div>
-          )}
-          
-          {/* Hover action hint */}
-          <div className="text-[9px] text-center mt-1 text-muted-foreground">
-            Click to navigate to this conversation
           </div>
-        </div>
-      )}
       
       {/* Station connectors */}
       <Handle 
@@ -491,6 +1049,11 @@ export function Minimap({ onSelectNode }: MinimapProps) {
     // Call onSelectNode if provided
     if (onSelectNode) {
       onSelectNode(node.id);
+    }
+    
+    // Don't switch branch for branch root nodes (those are handled in the node component)
+    if (node.type === 'branchRootNode') {
+      return;
     }
     
     // Switch to the branch if it has a branch ID

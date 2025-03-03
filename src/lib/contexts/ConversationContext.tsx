@@ -52,6 +52,7 @@ interface StationNodeData extends BaseNodeData {
   timestamp: string;
   calculatedWidth: number;
   stationNumber: number;
+  summary?: string; // Optional AI-generated summary of the conversation at this point
   fullData: {
     userMessage?: TimelineNode;
     assistantMessage?: TimelineNode;
@@ -1251,7 +1252,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
                 animated: activeBranches.has(childBranch.branchId),
                 // Use the handleId assigned to this branch
                 sourceHandle: childBranch.handleId,
-                targetHandle: 'left',
+                // Use 'left' for right branches and 'right' for left branches
+                targetHandle: childBranch.direction === 'right' ? 'left' : 'right',
                 style: { 
                   stroke: childBranch.branchData.color, 
                   strokeWidth: activeBranches.has(childBranch.branchId) ? 4 : 3,

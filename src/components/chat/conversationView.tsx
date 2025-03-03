@@ -342,7 +342,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
         )}
 
         {/* Add the continuing track segment INSIDE the scroll container */}
-        <div className="relative w-full max-w-3xl mx-auto flex-1 min-h-[100px]">
+        {/* <div className="relative w-full max-w-3xl mx-auto flex-1 min-h-[100px]">
           <div 
             className="absolute left-1/2 transform -translate-x-1/2 z-0" 
             style={{
@@ -352,7 +352,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               height: '100%'
             }}
           />
-        </div>
+        </div> */}
 
         <div ref={messagesEndRef} className="h-4" />
       </div>

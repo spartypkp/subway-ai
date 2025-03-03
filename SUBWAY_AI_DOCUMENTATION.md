@@ -57,6 +57,7 @@ Subway AI's user experience is built around five core principles:
 
 ### Frontend
 - **Framework**: Next.js 15 with React 19
+- ** TYPESCRIPT **: ALWAYS TYPESCRIPT!
 - **State Management**: React Hooks (useState, useEffect, useRef)
 - **Styling**: Tailwind CSS with custom design system
 - **UI Components**: Custom components built on Radix UI primitives
@@ -196,12 +197,6 @@ CREATE TABLE timeline_nodes (
 - Node.js 18+ and npm/yarn
 - PostgreSQL 14+
 
-### Installation
-1. Clone the repository
-2. Install dependencies: `npm install`
-3. Configure database connection in `.env`
-4. Run database migrations
-5. Start development server: `npm run dev`
 
 ### Local Development
 The application will be available at http://localhost:3000 
