@@ -23,20 +23,25 @@ import ReactFlow, {
   Background,
   Controls,
   Edge,
+  EdgeTypes,
   Handle,
-  MiniMap as ReactFlowMiniMap,
+  MiniMap,
   Node,
   NodeProps,
+  NodeTypes,
   Position,
+  ReactFlowInstance,
+  ReactFlowProvider,
   useEdgesState,
   useNodesState,
   useReactFlow,
+  getBezierPath
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Branch } from '@/lib/types/database';
 import { GitBranch, MessageSquare, Train, RefreshCw, Bug, MoreHorizontal, PenLine, Trash2, Info, GitMerge, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useConversation,  } from '@/lib/contexts/ConversationContext';
+import { useConversation } from '@/lib/contexts/ConversationContext';
 import { ElkDebug } from './elk-debug';
 import {
   Popover,
@@ -980,6 +985,66 @@ function RootNode({ data }: NodeProps) {
   );
 }
 
+// Current position indicator component with improved positioning
+function CurrentPositionIndicator({ 
+  position, 
+  color 
+}: { 
+  position: { x: number, y: number } | null, 
+  color: string 
+}) {
+  if (!position) return null;
+  
+  return (
+    <div className="pointer-events-none" style={{ position: 'absolute', zIndex: 9999 }}>
+      {/* Outer pulse animation */}
+      <div
+        className="absolute rounded-full animate-pulse"
+        style={{
+          width: '24px',
+          height: '24px',
+          backgroundColor: `rgba(${hexToRgb(color)}, 0.25)`,
+          left: `${position.x}px`,
+          top: `${position.y}px`,
+          transform: 'translate(-50%, -50%)',
+          transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+          animationDuration: '2s'
+        }}
+      />
+      
+      {/* Middle ring */}
+      <div
+        className="absolute rounded-full"
+        style={{
+          width: '16px',
+          height: '16px',
+          backgroundColor: `rgba(${hexToRgb(color)}, 0.4)`,
+          left: `${position.x}px`,
+          top: `${position.y}px`,
+          transform: 'translate(-50%, -50%)',
+          transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+          border: '1px solid rgba(255, 255, 255, 0.7)'
+        }}
+      />
+      
+      {/* Inner dot - core indicator */}
+      <div
+        className="absolute rounded-full shadow-lg"
+        style={{
+          width: '8px',
+          height: '8px',
+          backgroundColor: color,
+          left: `${position.x}px`,
+          top: `${position.y}px`,
+          transform: 'translate(-50%, -50%)',
+          transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+          border: '1.5px solid white'
+        }}
+      />
+    </div>
+  );
+}
+
 // Helper function to convert hex color to RGB values for use in rgba()
 function hexToRgb(hex: string): string {
   // Remove # if present
@@ -998,8 +1063,123 @@ function hexToRgb(hex: string): string {
   return `${r}, ${g}, ${b}`;
 }
 
+// Custom edge for subway lines
+function SubwayEdge({
+  id,
+  data,
+  source,
+  target,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style
+}: any) {
+  // Get path string from getBezierPath
+  const bezierData = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+  
+  const edgePath = bezierData[0];
+  
+  return (
+    <path
+      id={id}
+      className="subway-edge"
+      d={edgePath}
+      fill="none"
+      strokeWidth={5}
+      stroke={style?.stroke || '#999'}
+      strokeLinecap="round"
+      strokeDasharray={style?.strokeDasharray}
+    />
+  );
+}
+
+// Custom edge for active path with position indicator
+function ActivePathEdge({
+  id,
+  data,
+  source,
+  target,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style,
+  selected
+}: any) {
+  const { currentBranchId, currentScrollPosition } = useConversation();
+  const [showLabel, setShowLabel] = useState(false);
+  const isHighlighted = data?.isOnActivePath || selected;
+  
+  // Get edge path
+  const bezierData = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+  
+  // The first element of the array is the path
+  const edgePath = bezierData[0];
+  
+  return (
+    <>
+      <path
+        id={id}
+        className="subway-edge"
+        d={edgePath}
+        fill="none"
+        strokeWidth={6}
+        stroke={style?.stroke || '#999'}
+        strokeOpacity={isHighlighted ? 1 : 0.5}
+        strokeDasharray={style?.strokeDasharray}
+        onMouseEnter={() => setShowLabel(true)}
+        onMouseLeave={() => setShowLabel(false)}
+      />
+      {/* Highlight overlay for active path */}
+      {isHighlighted && (
+        <path
+          d={edgePath}
+          fill="none"
+          strokeWidth={2}
+          stroke="#fff"
+          strokeOpacity={0.5}
+          strokeDasharray="5,5"
+        />
+      )}
+      {/* Optional label for path information */}
+      {showLabel && (
+        <text
+          dy={-8}
+          fill={style?.stroke || '#999'}
+          fontSize={10}
+          fontWeight="bold"
+          textAnchor="middle"
+          style={{ pointerEvents: 'none' }}
+        >
+          <textPath href={`#${id}`} startOffset="50%">
+            {data?.label || 'Active Path'}
+          </textPath>
+        </text>
+      )}
+    </>
+  );
+}
+
 export function Minimap({ onSelectNode }: MinimapProps) {
-  // Use the conversation context
   const {
     projectId,
     currentBranchId,
@@ -1008,8 +1188,19 @@ export function Minimap({ onSelectNode }: MinimapProps) {
     fetchData,
     recalculateLayout,
     getNodesForReactFlow,
-    loading
+    loading,
+    currentScrollPosition,
+    getPositionAlongPath,
+    getBranchColor,
+    getBranchPath
   } = useConversation();
+
+  // Get active path node IDs
+  const activePathNodeIds = useMemo(() => {
+    if (!currentBranchId) return [];
+    const path = getBranchPath(currentBranchId);
+    return path.map(node => node.id);
+  }, [currentBranchId, getBranchPath]);
 
   // Memoize nodeTypes to prevent recreation on each render
   const memoizedNodeTypes = useMemo(() => ({
@@ -1025,7 +1216,263 @@ export function Minimap({ onSelectNode }: MinimapProps) {
   const [error, setError] = useState<string | null>(null);
   const [showBranchLabels, setShowBranchLabels] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   
+  // State for current position indicator
+  const [indicatorPosition, setIndicatorPosition] = useState<{ x: number, y: number } | null>(null);
+  
+  // More accurate position calculation along SVG paths
+  const calculatePositionOnEdge = useCallback((fromNodeId: string, toNodeId: string, progress: number) => {
+    if (!reactFlowInstance) {
+      console.warn("React Flow instance not available");
+      return null;
+    }
+    
+    // Try to find the source and target nodes
+    const fromNode = nodes.find(n => n.id === fromNodeId);
+    const toNode = nodes.find(n => n.id === toNodeId);
+    if (!fromNode || !toNode) {
+      console.warn(`Could not find nodes: fromNode (${fromNodeId}): ${!!fromNode}, toNode (${toNodeId}): ${!!toNode}`);
+      return null;
+    }
+    
+    // Get the ReactFlow wrapper element for coordinate conversion
+    const reactFlowWrapper = document.querySelector('.react-flow-wrapper');
+    if (!reactFlowWrapper) {
+      console.warn("ReactFlow wrapper not found");
+      return null;
+    }
+    
+    // Try multiple selector patterns to find the edge path
+    // Sometimes ReactFlow renders edge IDs with variations
+    const edgeSelectors = [
+      `[data-testid="rf__edge-${fromNodeId}-${toNodeId}"] path.react-flow__edge-path`,
+      `[data-testid="rf__edge-${fromNodeId}-${toNodeId}"] path:not(.react-flow__edge-interaction)`,
+      `[data-testid^="rf__edge-${fromNodeId}"][data-testid$="${toNodeId}"] path`,
+      `.react-flow__edge[data-testid*="${fromNodeId}"][data-testid*="${toNodeId}"] path`,
+      // Try edges in both directions
+      `[data-testid="rf__edge-${toNodeId}-${fromNodeId}"] path.react-flow__edge-path`,
+      // Generic selector for all edges
+      `.react-flow__edge path.react-flow__edge-path`
+    ];
+    
+    // Try each selector
+    let edgePath: SVGPathElement | null = null;
+    
+    for (const selector of edgeSelectors) {
+      const element = document.querySelector(selector) as SVGPathElement;
+      if (element) {
+        edgePath = element;
+        console.log(`Found edge path with selector: ${selector}`);
+        break;
+      }
+    }
+    
+    // If we found a path element, use it to calculate the position
+    if (edgePath) {
+      try {
+        // Use the SVG path's native getTotalLength and getPointAtLength methods
+        const pathLength = edgePath.getTotalLength();
+        const pointAlong = edgePath.getPointAtLength(progress * pathLength);
+        
+        // Get the viewport transformation from ReactFlow
+        const viewport = reactFlowInstance.getViewport();
+        
+        // Get the SVG container for coordinate translation
+        const svgContainer = document.querySelector('.react-flow__renderer svg') as SVGSVGElement;
+        if (!svgContainer) {
+          console.warn("SVG container not found");
+          return null;
+        }
+        
+        // Convert SVG coordinates to client coordinates using getBoundingClientRect
+        const svgRect = svgContainer.getBoundingClientRect();
+        
+        // Adjust point coordinates based on viewport transformation and SVG position
+        const x = pointAlong.x * viewport.zoom + viewport.x + svgRect.left;
+        const y = pointAlong.y * viewport.zoom + viewport.y + svgRect.top;
+        
+        console.log("Point calculation successful:", { x, y, pathLength, progress });
+        return { x, y };
+      } catch (error) {
+        console.error('Error calculating point on path:', error);
+      }
+    } else {
+      console.warn("No edge path found between nodes, tried selectors:", edgeSelectors);
+      
+      // Dump edge info for debugging
+      console.log("All edges:", edges);
+      console.log("Looking for edge between:", fromNodeId, toNodeId);
+      
+      // Look for the edge in our edges array
+      const edge = edges.find(e => 
+        (e.source === fromNodeId && e.target === toNodeId) || 
+        (e.source === toNodeId && e.target === fromNodeId)
+      );
+      console.log("Found edge in our data:", edge);
+    }
+    
+    // Fallback to the bezier approximation if we can't find the path element
+    console.log("Using fallback position calculation");
+    const fallbackPosition = calculateFallbackPosition(fromNode, toNode, progress);
+    return fallbackPosition;
+  }, [nodes, edges, reactFlowInstance]);
+  
+  // Fallback calculation using bezier approximation
+  const calculateFallbackPosition = useCallback((fromNode: Node, toNode: Node, progress: number) => {
+    // Convert node positions to screen coordinates
+    const fromX = fromNode.position.x + (fromNode.width || 0) / 2;
+    const fromY = fromNode.position.y + (fromNode.height || 0) / 2;
+    const toX = toNode.position.x + (toNode.width || 0) / 2;
+    const toY = toNode.position.y + (toNode.height || 0) / 2;
+    
+    // Simple bezier curve approximation
+    const t = progress;
+    const mt = 1 - t;
+    
+    // Calculate control points for a smooth curve
+    const dx = Math.abs(toX - fromX);
+    const dy = Math.abs(toY - fromY);
+    const controlOffset = Math.min(dx, dy) * 0.7;
+    
+    // Different control points based on node alignment
+    if (dx > dy) {
+      // More horizontal path
+      const cp1x = fromX + controlOffset;
+      const cp1y = fromY;
+      const cp2x = toX - controlOffset;
+      const cp2y = toY;
+      
+      // Calculate point along cubic bezier
+      const x = mt*mt*mt*fromX + 3*mt*mt*t*cp1x + 3*mt*t*t*cp2x + t*t*t*toX;
+      const y = mt*mt*mt*fromY + 3*mt*mt*t*cp1y + 3*mt*t*t*cp2y + t*t*t*toY;
+      
+      // Convert to screen coordinates
+      const viewport = reactFlowInstance?.getViewport() || { x: 0, y: 0, zoom: 1 };
+      const reactFlowBounds = document.querySelector('.react-flow-wrapper')?.getBoundingClientRect();
+      
+      if (reactFlowBounds) {
+        return { 
+          x: x * viewport.zoom + viewport.x + reactFlowBounds.left,
+          y: y * viewport.zoom + viewport.y + reactFlowBounds.top
+        };
+      }
+      
+      return { x, y };
+    } else {
+      // More vertical path
+      const cp1x = fromX;
+      const cp1y = fromY + controlOffset;
+      const cp2x = toX;
+      const cp2y = toY - controlOffset;
+      
+      // Calculate point along cubic bezier
+      const x = mt*mt*mt*fromX + 3*mt*mt*t*cp1x + 3*mt*t*t*cp2x + t*t*t*toX;
+      const y = mt*mt*mt*fromY + 3*mt*mt*t*cp1y + 3*mt*t*t*cp2y + t*t*t*toY;
+      
+      // Convert to screen coordinates
+      const viewport = reactFlowInstance?.getViewport() || { x: 0, y: 0, zoom: 1 };
+      const reactFlowBounds = document.querySelector('.react-flow-wrapper')?.getBoundingClientRect();
+      
+      if (reactFlowBounds) {
+        return { 
+          x: x * viewport.zoom + viewport.x + reactFlowBounds.left,
+          y: y * viewport.zoom + viewport.y + reactFlowBounds.top
+        };
+      }
+      
+      return { x, y };
+    }
+  }, [reactFlowInstance]);
+  
+  // Create an observer to watch for changes in ReactFlow's SVG paths
+  // This ensures we can accurately find the path elements even after React updates
+  useEffect(() => {
+    if (!reactFlowInstance) return;
+    
+    const observer = new MutationObserver(() => {
+      // Path elements were updated, refresh if needed
+      if (indicatorPosition) {
+        const pathInfo = getPositionAlongPath(currentScrollPosition);
+        if (pathInfo) {
+          const pos = calculatePositionOnEdge(
+            pathInfo.fromNodeId, 
+            pathInfo.toNodeId, 
+            pathInfo.progress
+          );
+          setIndicatorPosition(pos);
+        }
+      }
+    });
+    
+    const reactFlowWrapper = document.querySelector('.react-flow');
+    if (reactFlowWrapper) {
+      observer.observe(reactFlowWrapper, { 
+        childList: true, 
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['d'] // watch for changes in path 'd' attribute
+      });
+    }
+    
+    return () => observer.disconnect();
+  }, [reactFlowInstance, calculatePositionOnEdge, getPositionAlongPath, currentScrollPosition, indicatorPosition]);
+  
+  // Add specific effect to force update position when ReactFlow is ready
+  useEffect(() => {
+    // Only try to calculate position when ReactFlow is ready
+    if (!reactFlowInstance) return;
+    
+    // Get the path position based on current scroll
+    const pathInfo = getPositionAlongPath(currentScrollPosition);
+    console.log("Path info from scroll:", pathInfo, "Scroll position:", currentScrollPosition);
+    
+    if (pathInfo) {
+      const pos = calculatePositionOnEdge(
+        pathInfo.fromNodeId, 
+        pathInfo.toNodeId, 
+        pathInfo.progress
+      );
+      console.log("Calculated position on edge:", pos);
+      
+      if (pos) {
+        setIndicatorPosition(pos);
+        console.log("Indicator position set to:", pos);
+      } else {
+        // If position calculation fails, use a very simple fallback
+        // Just pick a position between the two nodes
+        const fromNode = nodes.find(n => n.id === pathInfo.fromNodeId);
+        const toNode = nodes.find(n => n.id === pathInfo.toNodeId);
+        
+        if (fromNode && toNode) {
+          const pos = calculateFallbackPosition(fromNode, toNode, pathInfo.progress);
+          setIndicatorPosition(pos);
+          console.log("Used fallback position calculation:", pos);
+        } else {
+          console.warn("Position calculation failed, returned null");
+        }
+      }
+    } else {
+      console.warn("No valid path position found for scroll percentage:", currentScrollPosition);
+      
+      // Add debug test position in one second if no valid path is found
+      setTimeout(() => {
+        if (!indicatorPosition) {
+          setIndicatorPosition({
+            x: window.innerWidth / 2,
+            y: window.innerHeight / 2
+          });
+          console.log("Forced debug position as last resort");
+        }
+      }, 1000);
+    }
+  }, [reactFlowInstance, currentScrollPosition, getPositionAlongPath, calculatePositionOnEdge, nodes, indicatorPosition, calculateFallbackPosition]);
+  
+  // Memoize edge types to prevent recreation on each render
+  const memoizedEdgeTypes = useMemo(() => ({
+    'subway-edge': SubwayEdge,
+    'active-path': ActivePathEdge,
+  }), []);
   
   // Update nodes and edges when data changes
   useEffect(() => {
@@ -1033,16 +1480,35 @@ export function Minimap({ onSelectNode }: MinimapProps) {
       // Get nodes and edges from the context
       const { nodes: flowNodes, edges: flowEdges } = getNodesForReactFlow();
       
+      // Mark edges that are on the active path
+      const updatedEdges = flowEdges.map(edge => {
+        // Check if this edge is on the active path
+        const isOnActivePath = activePathNodeIds?.includes(edge.source) && 
+                              activePathNodeIds?.includes(edge.target);
+                              
+        // Use different edge type for active path edges
+        if (isOnActivePath) {
+          return {
+            ...edge,
+            type: 'active-path',
+            data: {
+              ...edge.data,
+              isOnActivePath: true
+            }
+          };
+        }
+        
+        return edge;
+      });
+      
       // Update ReactFlow state
       setNodes(flowNodes);
-      setEdges(flowEdges);
+      setEdges(updatedEdges);
     } catch (err) {
       console.error('Error updating flow nodes:', err);
       setError('Failed to update flow visualization');
     }
-  }, [getNodesForReactFlow, setNodes, setEdges]);
-  
-
+  }, [getNodesForReactFlow, setNodes, setEdges, activePathNodeIds]);
   
   // Handle node selection
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
@@ -1101,20 +1567,31 @@ export function Minimap({ onSelectNode }: MinimapProps) {
   });
   
   return (
-    <div className="h-full w-full relative">
+    <div className="relative w-full h-full">
       <style jsx global>{`
         /* Custom subway-themed background */
         .react-flow__background {
-          background-image: 
-            linear-gradient(to right, rgba(226, 232, 240, 0.1) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(226, 232, 240, 0.1) 1px, transparent 1px);
+          background-color: #f7fafc;
+          background-image: linear-gradient(rgba(0, 0, 0, 0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0, 0, 0, 0.05) 1px, transparent 1px);
           background-size: 20px 20px;
         }
         
-        /* Fade in animation for hover effects */
+        /* Custom edge styling */
+        .subway-edge {
+          stroke-width: 5;
+          stroke-linecap: round;
+        }
+        
+        /* Custom node styling */
+        .react-flow__node {
+          transition: transform 0.2s ease;
+        }
+        
+        /* Animation for fading in elements */
         @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(-5px); }
-          to { opacity: 1; transform: translateY(0); }
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
         
         .animate-fadeIn {
@@ -1123,75 +1600,17 @@ export function Minimap({ onSelectNode }: MinimapProps) {
           animation-fill-mode: both;
         }
         
-        /* Make edges look more like subway lines */
-        .react-flow__edge-path {
-          stroke-linecap: round;
-          stroke-linejoin: round;
-        }
-        
-        /* Enhance the visualization with subtle zoom effects */
-        .react-flow__node {
-          transition: transform 0.2s ease;
-        }
-        
-        /* Subway loading animation styles */
-        .subway-loading-animation {
-          position: relative;
-          width: 200px;
-          height: 60px;
-        }
-        
-        .subway-line {
+        /* Debug styles for position indicator */
+        .debug-position-indicator {
           position: absolute;
-          top: 30px;
-          left: 0;
-          width: 100%;
-          height: 4px;
-          background-color: #3b82f6;
-          border-radius: 2px;
-        }
-        
-        .subway-train {
-          position: absolute;
-          top: 20px;
-          left: 0;
-          width: 20px;
-          height: 20px;
-          background-color: #3b82f6;
-          border-radius: 4px;
-          animation: train-move 3s infinite ease-in-out;
-        }
-        
-        .subway-station {
-          position: absolute;
-          top: 25px;
-          width: 10px;
-          height: 10px;
-          background-color: white;
-          border: 2px solid #3b82f6;
+          width: 30px;
+          height: 30px;
+          background-color: red;
           border-radius: 50%;
-        }
-        
-        .station-1 { left: 40px; }
-        .station-2 { left: 100px; }
-        .station-3 { left: 160px; }
-        
-        @keyframes train-move {
-          0% { left: 0; }
-          25% { left: 40px; }
-          35% { left: 40px; }
-          60% { left: 100px; }
-          70% { left: 100px; }
-          95% { left: 160px; }
-          100% { left: 180px; }
-        }
-        
-        /* Custom ReactFlow minimap styling */
-        .react-flow__minimap {
-          background-color: rgba(255, 255, 255, 0.9) !important;
-          border-radius: 8px !important;
-          border: 1px solid #e2e8f0 !important;
-          box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1) !important;
+          transform: translate(-50%, -50%);
+          z-index: 9999;
+          pointer-events: none;
+          opacity: 0.7;
         }
       `}</style>
       
@@ -1262,47 +1681,73 @@ export function Minimap({ onSelectNode }: MinimapProps) {
         </div>
       )}
       
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onNodeClick={onNodeClick}
-        nodeTypes={memoizedNodeTypes}
-        fitView
-        minZoom={0.2}
-        maxZoom={1.5}
-        defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
-        proOptions={{ hideAttribution: true }}
-        nodesDraggable={false}
-        nodesFocusable={true}
-        elementsSelectable={true}
-        onlyRenderVisibleElements={true} // Performance optimization for large maps
-      >
-        <Background color="#718096" gap={20} size={0.5} />
-        <Controls 
-          showInteractive={false}
-          className="bg-white bg-opacity-90 p-1 rounded-lg shadow-sm border border-gray-100"
-        />
-        <ReactFlowMiniMap 
-          style={{ 
-            height: 120,
-            backgroundColor: 'rgba(255, 255, 255, 0.9)',
-            borderRadius: '8px',
-            border: '1px solid #e2e8f0',
-            margin: '8px'
-          }} 
-          zoomable 
-          pannable 
-          maskColor="rgba(0, 0, 0, 0.1)"
-          nodeColor={(node) => {
-            // Highlight the current branch in the minimap
-            return node.data.branchId === currentBranchId 
-              ? node.data.color 
-              : `${node.data.color}80`; // Add 50% transparency
+      <div className="react-flow-wrapper w-full h-full">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          nodeTypes={memoizedNodeTypes}
+          edgeTypes={memoizedEdgeTypes}
+          onNodeClick={onNodeClick}
+          fitView
+          minZoom={0.1}
+          maxZoom={1.5}
+          defaultViewport={{ x: 0, y: 0, zoom: 0.5 }}
+          attributionPosition="bottom-left"
+          proOptions={{ hideAttribution: true }}
+          elementsSelectable={true}
+          onlyRenderVisibleElements={true} // Performance optimization for large maps
+          onInit={(instance) => {
+            console.log("ReactFlow initialized");
+            setReactFlowInstance(instance);
+          }}
+          className="react-flow"
+        >
+          <Background color="#718096" gap={20} size={0.5} />
+          <Controls position="bottom-right" showInteractive={false} />
+          <MiniMap 
+            nodeStrokeWidth={3}
+            nodeColor={(node: Node) => {
+              return node.data?.color || '#ddd';
+            }}
+            maskColor="rgba(240, 240, 240, 0.6)"
+          />
+        </ReactFlow>
+      </div>
+      
+      {/* Current position indicator - positioned absolutely over the ReactFlow component */}
+      <div className="position-indicator absolute inset-0 pointer-events-none">
+        {indicatorPosition && reactFlowInstance && (
+          <CurrentPositionIndicator 
+            position={indicatorPosition} 
+            color={currentBranchId ? getBranchColor(currentBranchId) : '#888'} 
+          />
+        )}
+        
+        {/* Debug indicator with fixed position just to verify rendering */}
+        <div 
+          className="debug-position-indicator"
+          style={{
+            left: '50%',
+            top: '50%',
+            border: '3px solid white'
           }}
         />
-      </ReactFlow>
+      </div>
+      
+      {/* Error display */}
+      {error && (
+        <div className="absolute bottom-4 left-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+          <p className="text-sm">{error}</p>
+          <button 
+            className="text-xs underline mt-1"
+            onClick={() => setError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
     </div>
   );
 } 

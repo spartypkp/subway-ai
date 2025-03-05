@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { CornerDownRight, Train } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ProjectRoot } from './nodes/projectRoot';
@@ -9,6 +9,7 @@ import { BranchRoot } from './nodes/branchRoot';
 import { useConversation } from '@/lib/contexts/ConversationContext';
 import { TimelineNode } from '@/lib/types/database';
 import { TrackSegment } from './nodes/trackSegment';
+import { throttle } from 'lodash';
 
 // Define the shape we expect for timeline nodes as used by our components
 
@@ -52,7 +53,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     getBranchName,
     branches,
     switchBranch,
-    allNodes
+    allNodes,
+    updateScrollPosition
   } = useConversation();
 
   // Local state
@@ -172,20 +174,38 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
 
   // Handle scroll events to show/hide scroll to bottom button
   useEffect(() => {
+    // Create the scroll handler function
     const handleScroll = () => {
       if (!scrollContainerRef.current) return;
 
       const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
       const isBottomVisible = scrollHeight - scrollTop - clientHeight < 100;
       setScrollToBottomVisible(!isBottomVisible && scrollHeight > clientHeight + 300);
+      
+      // Calculate and update scroll percentage for minimap position tracking
+      const scrollableHeight = scrollHeight - clientHeight;
+      if (scrollableHeight > 0) {
+        const scrollPercentage = scrollTop / scrollableHeight;
+        updateScrollPosition(scrollPercentage);
+      }
     };
-
+    
+    // Create a throttled version to improve performance
+    const throttledHandleScroll = throttle(handleScroll, 50); // 50ms throttle
+    
     const scrollContainer = scrollContainerRef.current;
     if (scrollContainer) {
-      scrollContainer.addEventListener('scroll', handleScroll);
-      return () => scrollContainer.removeEventListener('scroll', handleScroll);
+      scrollContainer.addEventListener('scroll', throttledHandleScroll);
+      // Call once initially to set the correct initial position
+      handleScroll();
+      
+      return () => {
+        scrollContainer.removeEventListener('scroll', throttledHandleScroll);
+        // Make sure to cancel any pending throttled calls on cleanup
+        throttledHandleScroll.cancel();
+      };
     }
-  }, []);
+  }, [updateScrollPosition]);
 
   // Auto-scroll when new messages arrive if already near the bottom
   useEffect(() => {

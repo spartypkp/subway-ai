@@ -70,6 +70,13 @@ interface BranchConnection {
   direction?: 'left' | 'right' | 'auto';
 }
 
+// Position along a path in the minimap
+interface PathPosition {
+  fromNodeId: string;
+  toNodeId: string;
+  progress: number; // 0-1 value representing position along the edge
+}
+
 // TypeScript types for subway station
 interface Station {
   position: number;
@@ -124,6 +131,11 @@ interface ConversationContextValue {
   isStreaming: boolean;
   streamingContent: string | null;
   streamingParentId: string | null;
+  
+  // Scroll position tracking
+  currentScrollPosition: number;
+  updateScrollPosition: (percentage: number) => void;
+  getPositionAlongPath: (scrollPercentage: number) => PathPosition | null;
   
   // Actions
   fetchData: () => Promise<void>;
@@ -184,6 +196,9 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
   
   // Track if conversation context is ready (has valid project data)
   const [isReady, setIsReady] = useState(false);
+
+  // Add scroll position state
+  const [currentScrollPosition, setCurrentScrollPosition] = useState(0);
 
   // Add console.logging logs
   useEffect(() => {
@@ -1380,6 +1395,92 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     return () => clearInterval(interval);
   }, [displayedChatNodes, pollingInterval, projectId, projectLoading, fetchData]);
 
+  // Update scroll position
+  const updateScrollPosition = (percentage: number) => {
+    setCurrentScrollPosition(Math.max(0, Math.min(1, percentage))); // Ensure it's between 0-1
+  };
+  
+  // Calculate position along the active branch path based on scroll percentage
+  const getPositionAlongPath = (scrollPercentage: number): PathPosition | null => {
+    // Get active branch path
+    const activePath = getBranchPath(currentBranchId);
+    if (!activePath.length) return null;
+    
+    // Filter for nodes that would actually appear in the minimap
+    // (user messages, assistant messages, branch points)
+    const visibleNodes = activePath.filter(node => 
+      node.type === 'user-message' || 
+      node.type === 'assistant-message' || 
+      node.type === 'branch-point'
+    );
+    
+    if (visibleNodes.length < 2) return null;
+    
+    // Apply weighting to nodes based on content length to better represent
+    // position in the conversation (longer messages take more scroll space)
+    const weightedSegments = visibleNodes.map((node, index) => {
+      if (index === visibleNodes.length - 1) return null; // Skip last node
+      
+      const nextNode = visibleNodes[index + 1];
+      
+      // Calculate weight based on content length of this node and the next
+      // This helps make the indicator position more accurate relative to scrolling
+      let weight = 1.0; // Default weight
+      
+      if (node.type === 'user-message' || node.type === 'assistant-message') {
+        // Use message length as a rough approximation of scroll space
+        const messageLength = node.message_text?.length || 0;
+        weight = Math.max(0.5, Math.min(2.0, messageLength / 100));
+      }
+      
+      return {
+        fromNodeId: node.id,
+        toNodeId: nextNode.id,
+        weight
+      };
+    }).filter(Boolean) as { fromNodeId: string; toNodeId: string; weight: number }[];
+    
+    // Calculate total weight
+    const totalWeight = weightedSegments.reduce((sum, segment) => sum + segment.weight, 0);
+    
+    // Find which segment we're in
+    let accumulatedWeight = 0;
+    let targetSegment = weightedSegments[0];
+    let segmentProgress = 0;
+    
+    for (const segment of weightedSegments) {
+      const segmentWeight = segment.weight / totalWeight;
+      
+      if (accumulatedWeight + segmentWeight >= scrollPercentage) {
+        targetSegment = segment;
+        // Calculate progress within the current segment (0-1)
+        segmentProgress = (scrollPercentage - accumulatedWeight) / segmentWeight;
+        break;
+      }
+      
+      accumulatedWeight += segmentWeight;
+    }
+    
+    // Handle edge case when scroll is at very bottom
+    if (scrollPercentage >= 0.99) {
+      const lastSegment = weightedSegments[weightedSegments.length - 1];
+      return {
+        fromNodeId: lastSegment.fromNodeId,
+        toNodeId: lastSegment.toNodeId,
+        progress: 1.0
+      };
+    }
+    
+    // Ensure segment progress is between 0 and 1
+    segmentProgress = Math.max(0, Math.min(1, segmentProgress));
+    
+    return {
+      fromNodeId: targetSegment.fromNodeId,
+      toNodeId: targetSegment.toNodeId,
+      progress: segmentProgress
+    };
+  };
+
   // The context value
   const contextValue = useMemo<ConversationContextValue>(() => ({
     // Data
@@ -1396,6 +1497,11 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     isStreaming,
     streamingContent,
     streamingParentId,
+    
+    // Scroll position tracking
+    currentScrollPosition,
+    updateScrollPosition,
+    getPositionAlongPath,
     
     // Actions
     fetchData,
@@ -1431,7 +1537,10 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({
     getBranchColor,
     getBranchName,
     getBranchPath,
-    getNodesForReactFlow
+    getNodesForReactFlow,
+    currentScrollPosition,
+    updateScrollPosition,
+    getPositionAlongPath
   ]);
 
   // Add ready state to prevent rendering until project is ready
