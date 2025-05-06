@@ -1,38 +1,10 @@
 // app/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
-import { ProjectDialog } from "@/components/projectDialog";
-import { Minimap } from "@/components/minimap";
-// import { MinimapWithContext } from "@/components/minimapWithContext";
 import { ChatControls } from "@/components/chat/chatControls";
-// import { ChatControlsWithContext } from "@/components/chat/chatControlsWithContext";
-// import { MessageList } from "@/components/chat/messageList";
 import { ConversationView } from "@/components/chat/conversationView";
-// import { MessageListWithContext } from "@/components/chat/messageListWithContext";
-import { Button } from "@/components/ui/button";
-import { 
-	PlusIcon, 
-	Menu, 
-	Train, 
-	GitBranch, 
-	Map,
-	ChevronDown,
-	Trash2,
-	ArrowLeftCircle,
-	ArrowRightCircle
-} from "lucide-react";
-import { Project, TimelineNode } from "@/lib/types/database";
-import { H1 } from "@/components/ui/typography";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Minimap } from "@/components/minimap";
+import { ProjectDialog } from "@/components/projectDialog";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -43,9 +15,7 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { cn } from "@/lib/utils";
-import { useProject } from "@/lib/contexts/ProjectContext";
-import { useConversation } from "@/lib/contexts/ConversationContext";
+import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
@@ -54,8 +24,33 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { H1 } from "@/components/ui/typography";
+import { useConversation } from "@/lib/contexts/ConversationContext";
+import { useProject } from "@/lib/contexts/ProjectContext";
+import { cn } from "@/lib/utils";
+import {
+	ArrowLeftCircle,
+	ArrowRightCircle,
+	ChevronDown,
+	GitBranch,
+	Map,
+	Menu,
+	PlusIcon,
+	Train,
+	Trash2
+} from "lucide-react";
+import { useEffect, useState } from "react";
 
 export default function Home() {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -66,17 +61,16 @@ export default function Home() {
 	const [branchReason, setBranchReason] = useState('');
 	const [creatingBranch, setCreatingBranch] = useState(false);
 	const [branchDirection, setBranchDirection] = useState<'left' | 'right' | 'auto'>('auto');
-	
+
 	// Get project data from ProjectContext
-	const { 
-		projects, 
-		selectedProject, 
-		selectedProjectId, 
-		mainBranchId, 
-		loading: projectLoading, 
-		selectProject, 
-		createProject, 
-		deleteProject 
+	const {
+		projects,
+		selectedProject,
+		selectedProjectId,
+		loading: projectLoading,
+		selectProject,
+		createProject,
+		deleteProject
 	} = useProject();
 
 	// Get conversation data from ConversationContext
@@ -107,7 +101,7 @@ export default function Home() {
 
 	const handleDeleteProject = async () => {
 		if (!selectedProjectId) return;
-		
+
 		try {
 			await deleteProject(selectedProjectId);
 			setIsDeleteDialogOpen(false);
@@ -116,16 +110,17 @@ export default function Home() {
 		}
 	};
 
+	/* Commented out until needed
 	const handleBranchSelect = (branchId: string) => {
 		console.log('🔍 DEBUG: Branch selected:', branchId);
-		
+
 		// Check if we're switching to a different branch
 		if (branchId !== currentBranchId) {
 			console.log('🔍 DEBUG: Switching from branch', currentBranchId, 'to branch', branchId);
-			
+
 			// Use the context's switchBranch method
 			switchBranch(branchId);
-			
+
 			// Close the sidebar if it's open
 			if (isSidebarOpen) {
 				setIsSidebarOpen(false);
@@ -134,7 +129,8 @@ export default function Home() {
 			console.log('🔍 DEBUG: Already on branch', branchId);
 		}
 	};
-	
+	*/
+
 	// Handle branch creation from a message
 	const handleBranchClick = (messageId: string, direction?: 'left' | 'right' | 'auto') => {
 		setSelectedMessageId(messageId);
@@ -190,15 +186,15 @@ export default function Home() {
 									<Train className="h-5 w-5" />
 									Subway AI
 								</h2>
-								<Button 
-									size="sm" 
+								<Button
+									size="sm"
 									onClick={() => setIsCreateDialogOpen(true)}
 								>
 									<PlusIcon className="h-4 w-4 mr-2" />
 									New Project
 								</Button>
 							</div>
-							
+
 							<div className="p-4 flex-1 overflow-hidden">
 								{selectedProjectId ? (
 									<>
@@ -232,7 +228,7 @@ export default function Home() {
 												</ScrollArea>
 											)}
 										</div>
-										
+
 										<div className="border-t pt-4">
 											<h3 className="font-medium mb-2 flex items-center gap-2">
 												<Train className="h-4 w-4" />
@@ -247,11 +243,11 @@ export default function Home() {
 														</div>
 													</div>
 												) : (
-                                                    
-                                                        <Minimap 
-															onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
-														/>
-                                                   
+
+													<Minimap
+														onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
+													/>
+
 												)}
 											</div>
 										</div>
@@ -263,8 +259,8 @@ export default function Home() {
 											<p className="text-muted-foreground text-sm">
 												Select a project to view branches
 											</p>
-											<Button 
-												variant="outline" 
+											<Button
+												variant="outline"
 												className="mt-4"
 												onClick={() => setIsCreateDialogOpen(true)}
 											>
@@ -277,7 +273,7 @@ export default function Home() {
 							</div>
 						</SheetContent>
 					</Sheet>
-					
+
 					<div className="flex items-center">
 						<H1 className="text-xl font-bold md:text-2xl flex items-center gap-2">
 							<Train className="h-5 w-5 text-primary hidden sm:inline-block" />
@@ -309,7 +305,7 @@ export default function Home() {
 							</DropdownMenuTrigger>
 							<DropdownMenuContent align="end">
 								{projects.map(project => (
-									<DropdownMenuItem 
+									<DropdownMenuItem
 										key={project.id}
 										onClick={() => {
 											selectProject(project.id);
@@ -329,7 +325,7 @@ export default function Home() {
 							</DropdownMenuContent>
 						</DropdownMenu>
 					)}
-					
+
 					<div className="flex items-center gap-2">
 						<Button
 							variant="outline"
@@ -340,7 +336,7 @@ export default function Home() {
 							<PlusIcon className="h-4 w-4 mr-2" />
 							New Project
 						</Button>
-						
+
 						{selectedProjectId && (
 							<Button
 								variant="outline"
@@ -354,7 +350,7 @@ export default function Home() {
 					</div>
 				</div>
 			</header>
-			
+
 			<div className="flex flex-1 overflow-hidden">
 				{/* Main Content Area */}
 				{selectedProject ? (
@@ -370,12 +366,12 @@ export default function Home() {
 									</div>
 								</div>
 							) : (
-								<Minimap 
+								<Minimap
 									onSelectNode={(nodeId) => console.log('Selected node:', nodeId)}
 								/>
 							)}
 						</div>
-						
+
 						{/* Chat Section */}
 						<div className="flex-1 flex flex-col w-full md:w-2/5 overflow-hidden">
 							{/* Branch Info */}
@@ -387,9 +383,9 @@ export default function Home() {
 											Branch Active
 										</span>
 									</div>
-									<Button 
-										variant="ghost" 
-										size="sm" 
+									<Button
+										variant="ghost"
+										size="sm"
 										onClick={() => switchBranch(null)}
 										className="h-7 text-xs"
 									>
@@ -398,22 +394,22 @@ export default function Home() {
 									</Button>
 								</div>
 							)}
-							
+
 							{/* Chat Area */}
 							<div className="flex-1 overflow-hidden flex flex-col">
-									<div className="flex-1 overflow-y-auto pb-2">
-										<ConversationView 
-											onMessageSelect={(messageId) => console.log('Message selected:', messageId)}
-											onBranchClick={handleBranchClick}
-										/>
+								<div className="flex-1 overflow-y-auto pb-2">
+									<ConversationView
+										onMessageSelect={(messageId) => console.log('Message selected:', messageId)}
+										onBranchClick={handleBranchClick}
+									/>
+								</div>
+
+								{/* Chat Controls */}
+								<div className="border-t bg-background/95 backdrop-blur-sm">
+									<div className="mx-auto">
+										<ChatControls />
 									</div>
-									
-									{/* Chat Controls */}
-									<div className="border-t bg-background/95 backdrop-blur-sm">
-										<div className="mx-auto">
-											<ChatControls />
-										</div>
-									</div>
+								</div>
 							</div>
 						</div>
 					</div>
@@ -433,26 +429,26 @@ export default function Home() {
 					</div>
 				)}
 			</div>
-			
+
 			<ProjectDialog
 				isOpen={isCreateDialogOpen}
 				onClose={() => setIsCreateDialogOpen(false)}
 				onCreate={handleCreateProject}
 			/>
-			
+
 			{/* Delete Project Confirmation Dialog */}
 			<AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>Delete Project</AlertDialogTitle>
 						<AlertDialogDescription>
-							Are you sure you want to delete "{selectedProject?.name}"? This action cannot be undone.
+							Are you sure you want to delete &ldquo;{selectedProject?.name}&rdquo;? This action cannot be undone.
 							All conversations and branches in this project will be permanently deleted.
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogCancel>Cancel</AlertDialogCancel>
-						<AlertDialogAction 
+						<AlertDialogAction
 							onClick={handleDeleteProject}
 							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 						>
@@ -496,8 +492,8 @@ export default function Home() {
 								<>Creating<span className="animate-pulse">...</span></>
 							) : (
 								<>
-									{branchDirection === 'left' ? 
-										<ArrowLeftCircle className="h-4 w-4 mr-1" /> : 
+									{branchDirection === 'left' ?
+										<ArrowLeftCircle className="h-4 w-4 mr-1" /> :
 										<ArrowRightCircle className="h-4 w-4 mr-1" />
 									}
 									Create Branch

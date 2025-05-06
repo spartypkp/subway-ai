@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 // Create a Pool instance using environment variables
 const pool = new Pool({
 	connectionString: process.env.DATABASE_URL,
-	ssl: process.env.NODE_ENV === 'production' 
+	ssl: process.env.NODE_ENV === 'production'
 		? { rejectUnauthorized: false }
 		: false
 });
@@ -20,7 +20,6 @@ export const db = {
 		const start = Date.now();
 		try {
 			const res = await pool.query(text, params);
-			const duration = Date.now() - start;
 			//console.log('Executed query', { text, duration, rows: res.rowCount });
 			return res;
 		} catch (error) {
@@ -28,7 +27,7 @@ export const db = {
 			throw error;
 		}
 	},
-	
+
 	/**
 	 * Get a client from the pool
 	 * @returns A client from the pool
@@ -44,4 +43,4 @@ export async function query(text: string, params?: any[]) {
 	return db.query(text, params);
 }
 
-export { pool }; 
+export { pool };

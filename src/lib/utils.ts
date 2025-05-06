@@ -11,7 +11,7 @@ export function generateNodeId(): string {
 	return crypto.randomUUID();
 }
 
-export function generateSummary(userMessage: Message, assistantResponse: Message): string {
+export function generateSummary(): string {
 	return `Faking summary for now!`;
 }
 
